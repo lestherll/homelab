@@ -10,4 +10,4 @@ scrape_configs:
   - job_name: node-exporter
     static_configs:
       - targets:
-          - host.containers.internal:9100
+          - 100.121.11.84:9100

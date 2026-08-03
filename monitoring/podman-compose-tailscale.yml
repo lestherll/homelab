@@ -1,0 +1,89 @@
+services:
+  prometheus:
+    image: docker.io/prom/prometheus:v3.13.2
+    container_name: prometheus
+    restart: unless-stopped
+
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
+
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+
+    networks:
+      - monitoring
+
+    ports:
+      # Binding to the tailscale IP (not 0.0.0.0) is what actually restricts
+      # access to tailnet members - the network itself doesn't need to be
+      # tailscale-aware for this. TAILSCALE_IP comes from .env.
+      - "${TAILSCALE_IP}:9090:9090"
+
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - "--spider"
+        - "-q"
+        - "http://localhost:9090/-/healthy"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+
+  node-exporter:
+    image: docker.io/prom/node-exporter:v1.10.2
+    container_name: node-exporter
+    restart: unless-stopped
+
+    # host networking is required to see host-level interfaces/metrics, but it
+    # means `ports:` has no effect - the listen-address flag has to do the job
+    # that the tailscale-IP port binding does for the other two services.
+    network_mode: host
+    pid: host
+
+    command:
+      - "--path.rootfs=/host"
+      - "--web.listen-address=${TAILSCALE_IP}:9100"
+
+    volumes:
+      - "/:/host:ro,rslave"
+
+
+  grafana:
+    image: docker.io/grafana/grafana:12.4.0
+    container_name: grafana
+    restart: unless-stopped
+
+    ports:
+      - "${TAILSCALE_IP}:3000:3000"
+
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_password
+
+    secrets:
+      - grafana_password
+
+    networks:
+      - monitoring
+
+
+networks:
+  monitoring:
+    driver: bridge
+
+
+volumes:
+  prometheus_data:
+  grafana_data:
+
+
+secrets:
+  grafana_password:
+    file: ./secrets/grafana_password
