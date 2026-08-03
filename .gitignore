@@ -1,0 +1,3 @@
+monitoring/data
+monitoring/secrets/*
+!monitoring/secrets/.gitkeep
