@@ -1,0 +1,7 @@
+# Empty placeholder — the chart's own default dashboards already cover node
+# and cluster health (plan §7). Populate this once a real application exists
+# and needs a per-application dashboard, as a ConfigMap labeled
+# grafana_dashboard: "1" (picked up by the sidecar, no UI interaction).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources: []

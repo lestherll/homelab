@@ -1,0 +1,8 @@
+# {{ ansible_managed }}
+write-kubeconfig-mode: "0644"
+disable:
+  - traefik
+  - servicelb
+node-ip: "{{ ansible_default_ipv4.address }}"
+tls-san:
+  - "{{ tailscale_ip }}"

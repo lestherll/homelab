@@ -1,0 +1,26 @@
+# Re-verify the current chart version and the oauth/pre-created-secret precedence
+# against `helm show values tailscale/tailscale-operator` at implementation time
+# (plan §6) — confirmed the values below exist, not the exact fallback rules.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: tailscale-operator
+  namespace: tailscale
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: tailscale-operator
+      sourceRef:
+        kind: HelmRepository
+        name: tailscale
+        namespace: flux-system
+  values:
+    fullnameOverride: tailscale-operator
+    # No `oauth:` block on purpose: the chart falls back to a pre-created
+    # Secret named "<fullname>-oauth" (here: tailscale-operator-oauth), which
+    # oauth-secret.sops.yaml provides — keeps the credential decoupled from
+    # this release's lifecycle rather than passed through Helm values.
+    operatorConfig:
+      defaultTags:
+        - "tag:k8s-operator"

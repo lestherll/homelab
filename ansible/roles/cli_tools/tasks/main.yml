@@ -1,0 +1,94 @@
+---
+# kubectl deliberately not installed here — it comes from k3s's own symlink
+# (k3s_server role), so there is nothing to do for it in this role.
+
+- name: Install age via apt
+  ansible.builtin.apt:
+    name: age
+    state: present
+    update_cache: true
+
+# --- flux CLI: pinned GitHub release binary, checksum-verified -------------
+
+- name: Check installed flux version
+  ansible.builtin.command: flux version --client
+  register: flux_installed
+  changed_when: false
+  failed_when: false
+
+- name: Determine whether flux needs (re)install
+  ansible.builtin.set_fact:
+    flux_needs_install: "{{ flux_version not in (flux_installed.stdout | default('')) }}"
+
+- name: Download and checksum-verify flux release tarball
+  ansible.builtin.get_url:
+    url: "https://github.com/fluxcd/flux2/releases/download/v{{ flux_version }}/flux_{{ flux_version }}_linux_{{ cli_tools_arch }}.tar.gz"
+    dest: "/tmp/flux_{{ flux_version }}_linux_{{ cli_tools_arch }}.tar.gz"
+    checksum: "sha256:https://github.com/fluxcd/flux2/releases/download/v{{ flux_version }}/flux_{{ flux_version }}_checksums.txt"
+    mode: "0644"
+  when: flux_needs_install
+
+- name: Extract and install flux binary
+  ansible.builtin.unarchive:
+    src: "/tmp/flux_{{ flux_version }}_linux_{{ cli_tools_arch }}.tar.gz"
+    dest: "{{ cli_tools_install_dir }}"
+    include: [flux]
+    remote_src: true
+    mode: "0755"
+  when: flux_needs_install
+
+# --- sops: pinned GitHub release binary, checksum-verified -----------------
+
+- name: Check installed sops version
+  ansible.builtin.command: sops --version
+  register: sops_installed
+  changed_when: false
+  failed_when: false
+
+- name: Determine whether sops needs (re)install
+  ansible.builtin.set_fact:
+    sops_needs_install: "{{ sops_version not in (sops_installed.stdout | default('')) }}"
+
+- name: Download and checksum-verify sops binary
+  ansible.builtin.get_url:
+    url: "https://github.com/getsops/sops/releases/download/v{{ sops_version }}/sops-v{{ sops_version }}.linux.{{ cli_tools_arch }}"
+    dest: "{{ cli_tools_install_dir }}/sops"
+    checksum: "sha256:https://github.com/getsops/sops/releases/download/v{{ sops_version }}/sops-v{{ sops_version }}.checksums.txt"
+    mode: "0755"
+  when: sops_needs_install
+
+# --- helm: pinned GitHub release binary, checksum-verified -----------------
+
+- name: Check installed helm version
+  ansible.builtin.command: helm version --short
+  register: helm_installed
+  changed_when: false
+  failed_when: false
+
+- name: Determine whether helm needs (re)install
+  ansible.builtin.set_fact:
+    helm_needs_install: "{{ ('v' + helm_version) not in (helm_installed.stdout | default('')) }}"
+
+- name: Download and checksum-verify helm release tarball
+  ansible.builtin.get_url:
+    url: "https://get.helm.sh/helm-v{{ helm_version }}-linux-{{ cli_tools_arch }}.tar.gz"
+    dest: "/tmp/helm-v{{ helm_version }}-linux-{{ cli_tools_arch }}.tar.gz"
+    checksum: "sha256:https://get.helm.sh/helm-v{{ helm_version }}-linux-{{ cli_tools_arch }}.tar.gz.sha256sum"
+    mode: "0644"
+  when: helm_needs_install
+
+- name: Extract helm tarball
+  ansible.builtin.unarchive:
+    src: "/tmp/helm-v{{ helm_version }}-linux-{{ cli_tools_arch }}.tar.gz"
+    dest: "/tmp"
+    remote_src: true
+    creates: "/tmp/linux-{{ cli_tools_arch }}/helm"
+  when: helm_needs_install
+
+- name: Install helm binary
+  ansible.builtin.copy:
+    src: "/tmp/linux-{{ cli_tools_arch }}/helm"
+    dest: "{{ cli_tools_install_dir }}/helm"
+    mode: "0755"
+    remote_src: true
+  when: helm_needs_install

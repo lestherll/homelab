@@ -1,0 +1,75 @@
+---
+- name: Determine target user for kubeconfig
+  ansible.builtin.set_fact:
+    k3s_target_user: "{{ homelab_operator_user }}"
+    k3s_target_home: "/home/{{ homelab_operator_user }}"
+
+- name: Ensure /etc/rancher/k3s exists
+  ansible.builtin.file:
+    path: /etc/rancher/k3s
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# The idempotent, restart-safe config surface — not INSTALL_K3S_EXEC flags on
+# every run. Change detection here drives the restart handler; install below
+# only ever runs once (guarded by the binary's presence).
+- name: Render k3s server config
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart k3s
+
+- name: Check whether k3s is already installed
+  ansible.builtin.stat:
+    path: /usr/local/bin/k3s
+  register: k3s_binary
+
+- name: Download k3s install script
+  ansible.builtin.get_url:
+    url: https://get.k3s.io
+    dest: /tmp/k3s-install.sh
+    mode: "0755"
+  when: not k3s_binary.stat.exists
+
+# stable channel current release, re-verified at install time by the script
+# itself — see §3 of the plan for why the version isn't hard-pinned here.
+- name: Install k3s (stable channel, server role)
+  ansible.builtin.command: /tmp/k3s-install.sh
+  environment:
+    INSTALL_K3S_CHANNEL: stable
+  when: not k3s_binary.stat.exists
+  changed_when: true
+
+- name: Ensure k3s service is enabled and running
+  ansible.builtin.systemd:
+    name: k3s
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Wait for kubeconfig to be written
+  ansible.builtin.wait_for:
+    path: /etc/rancher/k3s/k3s.yaml
+    timeout: 60
+
+- name: Ensure operator's ~/.kube directory exists
+  ansible.builtin.file:
+    path: "{{ k3s_target_home }}/.kube"
+    state: directory
+    owner: "{{ k3s_target_user }}"
+    group: "{{ k3s_target_user }}"
+    mode: "0700"
+
+- name: Copy kubeconfig into operator's ~/.kube/config
+  ansible.builtin.copy:
+    src: /etc/rancher/k3s/k3s.yaml
+    dest: "{{ k3s_target_home }}/.kube/config"
+    owner: "{{ k3s_target_user }}"
+    group: "{{ k3s_target_user }}"
+    mode: "0600"
+    remote_src: true

@@ -1,0 +1,8 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Homelab external heartbeat check (Alertmanager reachability)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/heartbeat-check.sh

@@ -1,0 +1,5 @@
+---
+# community.general provides the ufw module used by host_prereqs.
+# Install with: ansible-galaxy collection install -r ansible/requirements.yml
+collections:
+  - name: community.general
