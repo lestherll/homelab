@@ -1,13 +1,5 @@
-# CHANGEME: fill in `age` after generating the key (plan §4):
-#   mkdir -p ~/.config/sops/age
-#   age-keygen -o ~/.config/sops/age/keys.txt
-# Paste the "public key: age1..." line printed by age-keygen below, then
-# encrypt the two placeholder secrets:
-#   sops --encrypt --in-place infrastructure/tailscale-operator/oauth-secret.sops.yaml
-#   sops --encrypt --in-place infrastructure/observability/grafana-admin-secret.sops.yaml
-#
 # Only data/stringData get encrypted, so diffs on rotation stay legible.
 creation_rules:
   - path_regex: infrastructure/.*\.sops\.ya?ml$
     encrypted_regex: ^(data|stringData)$
-    age: CHANGEME-age-public-key
+    age: age1qr7amd9hzgd5eql673nxqt3pdf4c43pjk42dg7lfd9ern7uzrasqtf6gnc
