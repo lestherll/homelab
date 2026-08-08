@@ -3,4 +3,6 @@ kind: Kustomization
 resources:
   - sources
   - tailscale-operator
-  - observability
+  # observability deliberately not added yet — staged separately at cutover
+  # step 9, once the Tailscale operator is verified running (step 8), so the
+  # still-primary podman stack isn't competing with a half-verified new one.
