@@ -5,3 +5,4 @@ resources:
   - helmrepository-prometheus-community.yaml
   - gitrepository-fastapi-echo.yaml
   - gitrepository-personal-finance-dashboard.yaml
+  - helmrepository-cloudnative-pg.yaml

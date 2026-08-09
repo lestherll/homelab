@@ -6,3 +6,5 @@ resources:
   - observability
   - fastapi-echo
   - personal-finance-dashboard
+  - storage
+  - postgres
