@@ -2,3 +2,8 @@
 - name: reload systemd for heartbeat-watchdog
   ansible.builtin.systemd:
     daemon_reload: true
+
+- name: restart heartbeat-watchdog timer
+  ansible.builtin.systemd:
+    name: heartbeat-watchdog.timer
+    state: restarted

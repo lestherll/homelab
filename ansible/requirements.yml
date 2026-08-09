@@ -1,7 +1,12 @@
 ---
 # community.general provides the ufw module used by host_prereqs.
+# community.sops provides the vars plugin (ansible.cfg's vars_plugins_enabled)
+# that transparently decrypts ansible/inventory/group_vars/**/*.sops.yaml,
+# e.g. heartbeat_watchdog's ntfy_topic.
 # Install with: ansible-galaxy collection install -r ansible/requirements.yml
-# Pinned version, re-verified 2026-08-09 against the installed collection.
+# Pinned versions, re-verified 2026-08-09 against the installed collections.
 collections:
   - name: community.general
     version: "12.1.0"
+  - name: community.sops
+    version: "2.2.7"
