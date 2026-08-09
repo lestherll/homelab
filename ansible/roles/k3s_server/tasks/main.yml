@@ -12,6 +12,15 @@
     group: root
     mode: "0755"
 
+# Checked before the config render below so the restart handler (guarded by
+# k3s_binary.stat.exists) can tell a config change on an existing install
+# apart from a fresh install, where the service's first start already picks
+# up the freshly rendered config and a restart would be redundant.
+- name: Check whether k3s is already installed
+  ansible.builtin.stat:
+    path: /usr/local/bin/k3s
+  register: k3s_binary
+
 # The idempotent, restart-safe config surface — not INSTALL_K3S_EXEC flags on
 # every run. Change detection here drives the restart handler; install below
 # only ever runs once (guarded by the binary's presence).
@@ -23,11 +32,6 @@
     group: root
     mode: "0644"
   notify: restart k3s
-
-- name: Check whether k3s is already installed
-  ansible.builtin.stat:
-    path: /usr/local/bin/k3s
-  register: k3s_binary
 
 - name: Download k3s install script
   ansible.builtin.get_url:
