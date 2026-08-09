@@ -1,0 +1,10 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: cloudnative-pg
+  namespace: flux-system
+spec:
+  interval: 1h
+  # Canonical host as of 2026-08-09 — cloudnative-pg.github.io/charts
+  # 301-redirects here.
+  url: https://cloudnative-pg.io/charts

@@ -1,0 +1,13 @@
+# Same provisioner as the cluster's default `local-path` StorageClass —
+# reclaim policy is enforced by the PV controller, not the provisioner
+# itself, so no special provisioner config is needed for this to work.
+# Use this class (instead of the default) for anything D4 would classify
+# as "Durable": a deleted PVC's data is retained instead of destroyed
+# immediately, at the cost of needing manual PV cleanup after deletion.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-path-retain
+provisioner: rancher.io/local-path
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
