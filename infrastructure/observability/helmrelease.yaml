@@ -1,0 +1,82 @@
+# Re-verify current chart version at implementation time (plan §7 — this chart
+# moves roughly weekly). Verified against ArtifactHub as of 2026-08-04: 86.1.0.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kube-prometheus-stack
+  namespace: observability
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: kube-prometheus-stack
+      version: "86.1.0"
+      sourceRef:
+        kind: HelmRepository
+        name: prometheus-community
+        namespace: flux-system
+  values:
+    prometheus:
+      prometheusSpec:
+        # Deliberate reduction from the current podman stack's 30d, to fit
+        # D7's ~20%/~3GB budget with headroom for Loki's later addition.
+        retention: 15d
+        resources:
+          requests: { cpu: 200m, memory: 480Mi }
+          limits: { cpu: 500m, memory: 1400Mi }
+        storageSpec:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: local-path
+              accessModes: ["ReadWriteOnce"]
+              resources:
+                requests:
+                  storage: 10Gi
+
+    alertmanager:
+      alertmanagerSpec:
+        resources:
+          requests: { cpu: 25m, memory: 64Mi }
+          limits: { cpu: 100m, memory: 128Mi }
+        storage:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: local-path
+              accessModes: ["ReadWriteOnce"]
+              resources:
+                requests:
+                  storage: 1Gi
+
+    grafana:
+      admin:
+        existingSecret: grafana-admin
+      sidecar:
+        dashboards:
+          enabled: true
+      resources:
+        requests: { cpu: 50m, memory: 128Mi }
+        limits: { cpu: 200m, memory: 256Mi }
+
+    kube-state-metrics:
+      resources:
+        requests: { cpu: 10m, memory: 32Mi }
+        limits: { cpu: 50m, memory: 64Mi }
+
+    prometheus-node-exporter:
+      # Already the chart's defaults — set explicitly for documentation. Same
+      # technique the current podman setup uses (network_mode: host, pid: host,
+      # --path.rootfs=/host), just re-expressed as a k8s DaemonSet: no loss of
+      # fidelity, since it reads host-mounted /proc,/sys,/ directly. The
+      # regression this introduces (binds 0.0.0.0:9100 instead of the tailnet
+      # IP only) is fixed at the host firewall level — see host_prereqs's ufw
+      # rule, not here.
+      hostNetwork: true
+      hostPID: true
+      resources:
+        requests: { cpu: 10m, memory: 16Mi }
+        limits: { cpu: 50m, memory: 32Mi }
+
+    prometheusOperator:
+      resources:
+        requests: { cpu: 50m, memory: 128Mi }
+        limits: { cpu: 200m, memory: 256Mi }

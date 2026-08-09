@@ -1,0 +1,5 @@
+# Only data/stringData get encrypted, so diffs on rotation stay legible.
+creation_rules:
+  - path_regex: infrastructure/.*\.sops\.ya?ml$
+    encrypted_regex: ^(data|stringData)$
+    age: age1qr7amd9hzgd5eql673nxqt3pdf4c43pjk42dg7lfd9ern7uzrasqtf6gnc

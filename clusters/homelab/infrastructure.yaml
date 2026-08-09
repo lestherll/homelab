@@ -1,0 +1,19 @@
+# Committed after `flux bootstrap` (which generates clusters/homelab/flux-system/
+# and is picked up automatically by its root Kustomization, since that
+# reconciles everything under clusters/homelab/). Do not hand-edit flux-system/.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: infrastructure
+  namespace: flux-system
+spec:
+  interval: 10m
+  path: ./infrastructure
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age

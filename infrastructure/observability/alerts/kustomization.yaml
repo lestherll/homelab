@@ -1,0 +1,6 @@
+# Empty placeholder — the chart ships default alerts covering node and cluster
+# health already (plan §7). Populate this once a real application, build
+# pipeline, or data service exists and needs its own PrometheusRule.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources: []

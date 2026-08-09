@@ -1,0 +1,45 @@
+---
+- name: Fail loudly if ntfy_topic hasn't been set to a real value
+  ansible.builtin.assert:
+    that:
+      - ntfy_topic is defined
+      - "'CHANGEME' not in ntfy_topic"
+    fail_msg: >-
+      ntfy_topic is still the placeholder value. Generate a private,
+      unguessable topic (e.g. `openssl rand -hex 16`) and set it in
+      ansible/inventory/hosts.ini before deploying heartbeat_watchdog.
+
+- name: Install heartbeat check script
+  ansible.builtin.template:
+    src: heartbeat-check.sh.j2
+    dest: /usr/local/bin/heartbeat-check.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install heartbeat-watchdog systemd service
+  ansible.builtin.template:
+    src: heartbeat-watchdog.service.j2
+    dest: /etc/systemd/system/heartbeat-watchdog.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: reload systemd for heartbeat-watchdog
+
+- name: Install heartbeat-watchdog systemd timer
+  ansible.builtin.template:
+    src: heartbeat-watchdog.timer.j2
+    dest: /etc/systemd/system/heartbeat-watchdog.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify: reload systemd for heartbeat-watchdog
+
+- name: Flush handlers before enabling the timer
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start heartbeat-watchdog timer
+  ansible.builtin.systemd:
+    name: heartbeat-watchdog.timer
+    enabled: true
+    state: started

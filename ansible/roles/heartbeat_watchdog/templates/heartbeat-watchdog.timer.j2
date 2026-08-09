@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Run homelab external heartbeat check every 5 minutes
+
+[Timer]
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

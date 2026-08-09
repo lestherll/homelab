@@ -1,0 +1,42 @@
+---
+# k3s needs ip_forward=1. It does NOT need swapoff, unlike vanilla kubeadm —
+# no swap-related task here on purpose.
+- name: Enable net.ipv4.ip_forward via sysctl drop-in
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-k3s.conf
+    content: |
+      net.ipv4.ip_forward = 1
+    owner: root
+    group: root
+    mode: "0644"
+  register: k3s_sysctl_file
+
+- name: Apply sysctl settings immediately
+  ansible.builtin.command: sysctl --system
+  when: k3s_sysctl_file.changed
+  changed_when: true
+
+- name: Ensure ufw is installed
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+    update_cache: true
+
+# Regression fix vs. the current podman stack: the kube-prometheus-stack chart's
+# node-exporter DaemonSet runs with hostNetwork: true, which binds 0.0.0.0:9100 —
+# exposed to the whole home LAN, not just the tailnet, unlike the current podman
+# setup which binds only TAILSCALE_IP:9100. Scope it back down at the host firewall
+# level rather than fighting the chart's networking model.
+- name: Allow node-exporter port 9100 on the tailscale interface only
+  community.general.ufw:
+    rule: allow
+    interface: "{{ tailscale_interface }}"
+    direction: in
+    port: "9100"
+    proto: tcp
+    comment: "node-exporter — tailnet only"
+
+# Deliberately not touching ufw's enabled/disabled state or default policy here:
+# flipping that blind (without knowing every port this host already depends on,
+# e.g. SSH) risks a remote lockout. Enabling ufw, if desired, is left as an
+# explicit operator decision outside this role.

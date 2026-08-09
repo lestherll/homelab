@@ -1,0 +1,8 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - sources
+  - tailscale-operator
+  # observability deliberately not added yet — staged separately at cutover
+  # step 9, once the Tailscale operator is verified running (step 8), so the
+  # still-primary podman stack isn't competing with a half-verified new one.
