@@ -1,4 +1,0 @@
-monitoring/data
-monitoring/secrets/*
-!monitoring/secrets/.gitkeep
-monitoring/.env

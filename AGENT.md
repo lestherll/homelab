@@ -7,7 +7,6 @@ This repo is the declarative source of truth for a single-user homelab platform:
 - `ansible/` — host bootstrap and convergence (idempotent). `playbooks/converge.yml` runs roles in order: `host_prereqs` → `cli_tools` → `k3s_server` → `heartbeat_watchdog`. Inventory/vars in `ansible/inventory/hosts.ini`.
 - `infrastructure/` — Flux-managed Kubernetes manifests (HelmRepositories, HelmReleases, namespaces, SOPS-encrypted secrets), one subdirectory per component (`tailscale-operator/`, `observability/`, `sources/`).
 - `clusters/homelab/` — Flux's entrypoint Kustomization pointing at `infrastructure/`.
-- `monitoring/` — the **legacy** podman-compose observability stack (pre-k3s). Still running in parallel with `infrastructure/observability` until the new stack is verified equivalent; not to be torn down casually. Config is templated: `generate-config.sh` renders `prometheus.yml` from `prometheus.yml.template`, driven by `Makefile` (`make monitoring-up/down/restart/logs`).
 - `CONCEPT.md` — the full product concept doc (principles, scope, users). Read this for *why*, not just *what*.
 - `PR.md` — running log of code-review findings and fix status for the current branch/PR.
 
@@ -24,7 +23,6 @@ This repo is the declarative source of truth for a single-user homelab platform:
 
 ## Usage
 - Bootstrap/converge the host: `sudo ansible-playbook -i ansible/inventory/hosts.ini ansible/playbooks/converge.yml --tags <role>`.
-- Legacy monitoring stack: `make monitoring-up` / `monitoring-down` / `monitoring-restart` / `monitoring-logs`.
 - Cluster access: `kubectl` via `~/.kube/config` (kept in sync with `/etc/rancher/k3s/k3s.yaml` by the `k3s_server` role, both `0600`).
 - Editing an encrypted secret: `sops infrastructure/<path>/<name>.sops.yaml`.
 
