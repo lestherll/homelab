@@ -1,4 +1,4 @@
-# GitOps app-onboarding: learnings from instance #1
+# GitOps app-onboarding: learnings from hand-built instances
 
 Per `CONCEPT.md`'s D1 promotion rule, a resource type earns a Layer 1
 template (or Layer 2 typed API) only after the third instance has been
@@ -69,10 +69,16 @@ with actual persistence requirements.
   PVC — because uploads through the app and edits through the host CLI need
   to hit the *same* files, and a PVC copy would immediately diverge from
   the host-side copy. Worth remembering: this cluster's only StorageClass
-  is also node-local disk under the hood, so hostPath vs. PVC is not a
-  resilience decision — either way, the actual mitigation for "the host
-  dies" is an off-host backup of the data path, which doesn't exist yet
-  for this app (same class of gap as D12's age-key backup).
+  is also node-local disk under the hood, so hostPath vs. PVC was never a
+  resilience decision — neither survives losing this machine.
+- **Off-host backup deliberately deferred, not forgotten.** Instance #2
+  exposed the first real "what if the host dies" gap for actual
+  irreplaceable data (unlike Grafana/Prometheus state, which is
+  reproducible from git + re-scraping). Decided *not* to bolt on a
+  per-app backup script for this one hostPath — the intended fix is C6's
+  object-storage service (see Next steps below), so this app's data stays
+  on hostPath until that lands, then migrates. Recorded here so this
+  doesn't quietly get treated as "resolved" — it isn't yet.
 - **Pod `securityContext` (`runAsUser`/`runAsGroup`/`fsGroup`)`.** Needed
   once a pod writes to a hostPath owned by the host user, to keep
   upload-written files owned correctly instead of as `root`. Didn't come up
@@ -88,8 +94,36 @@ with actual persistence requirements.
 
 - `fastapi-echo` is live and verified end-to-end at
   `https://fastapi-echo.tailf4742d.ts.net`.
-- `personal-finance-dashboard` deploy/ manifests and Flux wiring written;
-  not yet verified live (pending the repo going public and the first image
-  build).
+- `personal-finance-dashboard` is live and verified end-to-end at
+  `https://personal-finance-dashboard.tailf4742d.ts.net` — pod `Running`,
+  image pulled with no `imagePullSecret` (repo and GHCR package both
+  flipped public), hostPath volume mounted, `/_stcore/health` returning
+  `200`.
 - One more hand-built instance is wanted before considering a Layer 1
   template or a typed `Application` API for app onboarding, per D1.
+
+## Next steps
+
+- **Object storage as the platform's first C6 data service.** Surfaced by
+  instance #2's upload/backup gap, not built speculatively: CONCEPT.md's
+  C6 already names object storage as a "should" alongside Postgres on the
+  same self-service pattern, and this is the first real pull for it.
+  Scoped deliberately small for its own first instance, same D1 logic as
+  the app-onboarding pattern — a single MinIO-or-equivalent `HelmRelease`
+  plus one manually-provisioned bucket/credential for
+  `personal-finance-dashboard`, not a templated self-service API yet (that
+  still needs 2 more hand-built data-service instances before it earns
+  one). Also **doesn't get this platform out of the node-local-disk
+  problem for free** — a single-node object store is still one disk on
+  this one machine; genuine off-host resilience needs the store's own
+  bucket replication/backup, which is a distinct follow-up, not implied by
+  "add object storage."
+- **`personal-finance-dashboard`'s app code isn't S3-native.** It reads/
+  writes local parquet + a DuckDB file via `DATA_DIR`. Moving it onto
+  object storage later means either app-side changes (adapters that speak
+  S3) or a fuse-style mount (rclone/s3fs) — the latter is a known
+  reliability risk for a database file under concurrent access, so this
+  needs a real decision when the time comes, not a default.
+- **Two more hand-built app instances** still wanted before a Layer 1
+  template or typed `Application` API for app onboarding (per D1) — this
+  doc should keep growing with each one.
