@@ -9,6 +9,7 @@ This repo is the declarative source of truth for a single-user homelab platform:
 - `clusters/homelab/` — Flux's entrypoint Kustomization pointing at `infrastructure/`.
 - `CONCEPT.md` — the full product concept doc (principles, scope, users). Read this for *why*, not just *what*.
 - `PR.md` — running log of code-review findings and fix status for the current branch/PR.
+- `docs/` — supplementary notes, e.g. `gitops-onboarding-learnings.md` tracking what each hand-built app instance teaches before any onboarding template gets built (per `CONCEPT.md`'s D1 promotion rule).
 
 ## Key operational facts
 - **Ansible privilege escalation is broken on this host.** Ubuntu 26.04's `sudo-rs` doesn't match Ansible's become-prompt regex (see the comment block in `ansible.cfg`). Always invoke playbooks wrapped in a top-level `sudo`, not `-K`:
