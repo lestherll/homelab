@@ -1,7 +1,16 @@
-# Empty placeholder — the chart's own default dashboards already cover node
-# and cluster health (plan §7). Populate this once a real application exists
-# and needs a per-application dashboard, as a ConfigMap labeled
-# grafana_dashboard: "1" (picked up by the sidecar, no UI interaction).
+# node-exporter-full.json is the standard "Node Exporter Full" community
+# dashboard (grafana.com ID 1860, uid rYdddlPWk), unmodified — the same one
+# commonly hand-imported alongside node_exporter, now provisioned from git
+# instead so it survives Grafana pod restarts without a manual re-import.
+# configMapGenerator content-hashes the name on every edit, so a dashboard
+# update always produces a clean new ConfigMap rather than an in-place edit.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-resources: []
+namespace: observability
+configMapGenerator:
+  - name: grafana-dashboard-node-exporter-full
+    files:
+      - node-exporter-full.json
+    options:
+      labels:
+        grafana_dashboard: "1"
