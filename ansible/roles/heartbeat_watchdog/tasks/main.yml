@@ -6,8 +6,9 @@
       - "'CHANGEME' not in ntfy_topic"
     fail_msg: >-
       ntfy_topic is still the placeholder value. Generate a private,
-      unguessable topic (e.g. `openssl rand -hex 16`) and set it in
-      ansible/inventory/hosts.ini before deploying heartbeat_watchdog.
+      unguessable topic (e.g. `openssl rand -hex 16`) and set it via
+      `sops ansible/inventory/group_vars/homelab/ntfy_topic.sops.yaml`
+      before deploying heartbeat_watchdog.
 
 - name: Install heartbeat check script
   ansible.builtin.template:
@@ -33,7 +34,9 @@
     owner: root
     group: root
     mode: "0644"
-  notify: reload systemd for heartbeat-watchdog
+  notify:
+    - reload systemd for heartbeat-watchdog
+    - restart heartbeat-watchdog timer
 
 - name: Flush handlers before enabling the timer
   ansible.builtin.meta: flush_handlers

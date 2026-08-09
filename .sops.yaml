@@ -3,3 +3,9 @@ creation_rules:
   - path_regex: infrastructure/.*\.sops\.ya?ml$
     encrypted_regex: ^(data|stringData)$
     age: age1qr7amd9hzgd5eql673nxqt3pdf4c43pjk42dg7lfd9ern7uzrasqtf6gnc
+  # Ansible inventory secrets (consumed via the community.sops vars plugin,
+  # see ansible.cfg). Only the value stays encrypted, so var names stay
+  # legible in diffs, matching the infrastructure/ convention above.
+  - path_regex: ansible/inventory/group_vars/.*\.sops\.ya?ml$
+    encrypted_regex: ^ntfy_topic$
+    age: age1qr7amd9hzgd5eql673nxqt3pdf4c43pjk42dg7lfd9ern7uzrasqtf6gnc
