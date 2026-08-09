@@ -63,9 +63,14 @@ spec:
         storageClassName: local-path
         accessModes: ["ReadWriteOnce"]
         size: 1Gi
+      # 256Mi was enough for classic Grafana but Grafana 13's unified-storage
+      # layer (dashboard-service watch loop + bleve-backend in-memory search
+      # indexes) pushes steady-state RSS past that, causing periodic OOMKills
+      # (observed: container OOMKilled at 312Mi actual usage, GOMEMLIMIT
+      # derived from the old 256Mi limit made it worse, not better).
       resources:
-        requests: { cpu: 50m, memory: 128Mi }
-        limits: { cpu: 200m, memory: 256Mi }
+        requests: { cpu: 50m, memory: 256Mi }
+        limits: { cpu: 200m, memory: 512Mi }
 
     kube-state-metrics:
       resources:
