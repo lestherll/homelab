@@ -2,7 +2,7 @@
 
 **Status:** Draft — v0.2 open questions resolved
 **Author:** —
-**Last updated:** 2026-08-01 (v0.3)
+**Last updated:** 2026-08-03 (v0.4)
 
 ---
 
@@ -71,7 +71,7 @@ Illustrative, not exhaustive:
 
 ## 4. Product principles
 
-1. **Git is the only interface for state.** If it isn't in a repo, it doesn't exist. Anything created by hand is by definition temporary and will be destroyed.
+1. **Git is the ledger of state; it is not always the trigger.** Declarative, slow-changing state — deployments, databases, environment promotion — is git-*triggered*: a commit is the only way to change it. Session-oriented and time-critical operations — starting a coding environment, break-glass incident response — may be triggered imperatively, but must converge back to git as the record within a bounded window (D14). Anything that never converges back is by definition temporary and will be destroyed.
 2. **Observability is a gate, not a phase.** A capability is not "done" until it emits metrics, logs, and health signals, and has at least one dashboard and one alert. Shipping something unobservable is shipping something unfinished.
 3. **Rebuildability over uptime.** I'd rather be able to restore the whole platform in an hour than avoid it ever going down. Recovery is the feature; availability is a side effect.
 4. **Golden paths, with escape hatches.** Common cases should be one small declarative file. Uncommon cases should still be possible by dropping to the raw layer underneath.
@@ -135,7 +135,8 @@ The mechanism by which everything else is requested.
 Remote development. No desktop.
 
 **Must:**
-- Provision a fresh environment for a given project on request, from a definition stored in that project's repo
+- Provision a fresh environment for a given project **on direct request — an API call, not a git commit** — from a definition stored in that project's repo
+- Auto-commit the rendered layer-1 manifest (D1) for every provisioned environment back to git, as the record of what was requested and when — imperative trigger, git ledger, per D14
 - Be reachable over SSH, and usable by a local editor's remote mode (VS Code / JetBrains / Neovim over SSH)
 - Include the project's toolchain preinstalled and pinned — JDK, Node, whatever the project declares
 - Persist my home directory and shell config across environment rebuilds
@@ -523,6 +524,28 @@ This answers the "considerably more machinery" objection in the original questio
 - **Anywhere long-lived tokens are unavoidable** — SOPS storage, narrowest available scope, calendar-driven rotation.
 
 **Verify before committing.** Provider capabilities in this area change, and the specifics above should be confirmed against current documentation rather than assumed.
+
+### D14 — Reconciliation lane: declarative trigger vs. imperative trigger, git as ledger
+
+**Decision.** Two lanes, not one.
+
+- **Declarative lane** (default). Deployments (C5), databases (C6), environment promotion (D3). A commit is the *only* way to change these. This is GitOps in the strict sense principle 1 originally claimed for everything, and it stays the golden path for anything long-lived, slow-changing, or where audit-trail-and-rollback-by-revert is the point.
+- **Imperative lane** (first-class, not an escape hatch). Session-oriented or time-critical operations: starting/stopping a coding environment (C2), and break-glass incident intervention (GP3). These are triggered by a direct API call, not a commit. Every imperative action must **converge back to git as a record** — the acting service auto-commits the rendered layer-1 manifest (D1); I never hand-write it — within a bounded window: target under 5 minutes for environment lifecycle events, immediately following resolution for break-glass.
+
+**Break-glass procedure, concretely:** suspend the reconciler's watch on the affected resource → make the direct fix → commit the fix to git so it matches reality → resume reconciliation. This is the same shape Flux (`flux suspend`/`resume`) and Argo CD (pause sync) formalise as standard practice, and it exists because an unsuspended reconciler reverts a manual fix on its next cycle. GP3's "I never SSH into a node" holds for the common case; the rare case now has a named procedure instead of being undefined.
+
+**Reasoning.** Forcing session-oriented resources through commit-and-reconcile optimises for the wrong thing: GP1's "within a minute" and GP2's "minutes, none of them spent on infrastructure" both assume request latency close to zero, which a poll- or webhook-triggered reconciler doesn't give for free. Comparable systems split the same way — dev-environment platforms that went API-first for workspace lifecycle did so for exactly this reason, while IaC-first alternatives are the slower, more ceremony-heavy path in the same comparisons. Meanwhile D11–D13 already treat rotated credentials and cluster-minted tokens as living outside git's write path; this decision names that pattern as a rule instead of leaving it as three unrelated ad hoc exceptions.
+
+**Rejected alternative:** keep everything in the declarative lane, and lean on D6's sentinel file plus a short reconciliation interval to make C2 feel responsive. Rejected because it treats a structural mismatch — a session-oriented resource forced through a reconciliation-oriented tool — as a tuning problem, and because it leaves break-glass entirely unaddressed: GP3 makes a promise the rest of the document had no mechanism to keep under real incident conditions.
+
+**Tradeoffs.**
+- *Cost:* two code paths instead of one. The typed API (D1 layer 2) now needs both a git-watching reconcile loop and a direct-call handler that writes git after the fact — more surface area, and the first place the platform has two triggers for what looks like the same state.
+- *Cost:* the imperative lane weakens the audit property GitOps gives for free. "What changed and when" now depends on the acting service reliably auto-committing, not on git history being causally prior to the change — a crash between "fix applied" and "commit written" leaves a real, if brief, gap between cluster state and git.
+- *Cost:* break-glass is, by construction, the one place I can diverge from declared state without review — the exact failure mode principle 1 exists to prevent. The mitigation is that it's bounded, logged, and requires a closing commit, not that the risk disappears.
+- *Benefit:* C2 stops fighting its own golden paths (GP1, GP2), and GP3 gets an actual mechanism instead of an unqualified promise.
+- *Benefit:* the git-as-ledger vs. git-as-trigger distinction makes D11–D13's existing exceptions legible as one rule instead of three unrelated ones.
+
+**Reverses if:** reconciliation latency turns out to be a non-issue in practice — e.g. webhook-triggered reconciliation proves fast enough that the declarative lane meets GP1's "within a minute" unmodified — in which case C2 folds back into the declarative lane and this decision is unnecessary complexity.
 
 ### 11.14 Remaining open questions
 
