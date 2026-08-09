@@ -90,17 +90,66 @@ with actual persistence requirements.
   instead. Worth a template eventually asking "public or private" once,
   not per-artifact.
 
+## Database track — Instance #1: `fastapi-echo` + Postgres
+
+D1's promotion rule tracks `Application` and `Database` as **separate**
+counters (both are named Layer-2 types). This is the first instance
+toward `Database`'s count, and deliberately reused `fastapi-echo` rather
+than a new app repo — the point was to isolate "does self-hosted
+Postgres provisioning + credential delivery actually work," not to
+re-test app-onboarding mechanics already proven twice.
+
+- **Split ownership confirmed workable:** the CloudNativePG operator
+  (shared, cluster-wide) lives in `homelab`'s `infrastructure/postgres/`;
+  the app-specific `Cluster` CR lives in `fastapi-echo`'s own repo,
+  co-located with its `Deployment`/`Service`. This avoided the
+  cross-repo secret-name coordination problem a homelab-repo-owned
+  `Cluster` would have created.
+- **C6's "credentials delivered automatically" actually works, not just
+  in principle.** CloudNativePG auto-generates a Secret
+  (`<cluster-name>-app`, containing a `uri` key among others) the moment
+  the `Cluster` is created — nothing hand-created, nothing SOPS-encrypted
+  for this at all. This is D12's "minted by the cluster" pattern working
+  as designed, confirmed by an actual instance instead of just being
+  named as the goal.
+- **The `local-path-retain` StorageClass fix works as a bare second
+  `StorageClass` object** — same `rancher.io/local-path` provisioner,
+  just `reclaimPolicy: Retain` — no provisioner-side config needed.
+  Confirmed live: the resulting PV shows `RECLAIMPOLICY=Retain`.
+- **D4 durability labels land on the PVC, not the PV.** `inheritedMetadata.labels`
+  on the `Cluster` CR propagates to the generated PVC correctly — the PV
+  itself stays unlabelled, which is normal Kubernetes dynamic-provisioning
+  behavior (PVs don't inherit PVC labels), not a CloudNativePG quirk.
+  Worth remembering for wherever D4's "unlabelled volume alerts"
+  enforcement eventually gets built: it needs to look at PVCs.
+- **The anticipated Cluster-init/pod-rollout race didn't actually bite
+  this time** — the app pod came up `1/1 Running` with zero restarts, the
+  database was ready before its first connection attempt. Worth recording
+  as "didn't materialize," not "solved" — there's still no explicit
+  ordering guarantee between the two, this was timing, not a fix.
+- **The known D2 gap bit exactly as documented.** After merging, the new
+  `/echo-history` route 404'd until a manual `kubectl rollout restart` —
+  confirms `:latest` + `imagePullPolicy: Always` really doesn't auto-roll
+  on a new image push, consistent with instance #1's finding.
+- No cert-manager dependency, confirmed in practice (not just via `helm
+  show values` beforehand) — the operator came up healthy without one.
+
 ## Status
 
 - `fastapi-echo` is live and verified end-to-end at
-  `https://fastapi-echo.tailf4742d.ts.net`.
+  `https://fastapi-echo.tailf4742d.ts.net`, now with a working Postgres
+  dependency (`POST /echo` persists, `GET /echo-history` reads back).
 - `personal-finance-dashboard` is live and verified end-to-end at
   `https://personal-finance-dashboard.tailf4742d.ts.net` — pod `Running`,
   image pulled with no `imagePullSecret` (repo and GHCR package both
   flipped public), hostPath volume mounted, `/_stcore/health` returning
   `200`.
-- One more hand-built instance is wanted before considering a Layer 1
-  template or a typed `Application` API for app onboarding, per D1.
+- **`Application` track: 2/3.** One more hand-built app instance wanted
+  before considering a Layer 1 template or typed `Application` API, per
+  D1.
+- **`Database` track: 1/3.** Two more hand-built database-consuming
+  instances wanted before considering a Layer 1 template or typed
+  `Database` API, per D1.
 
 ## Next steps
 
@@ -124,6 +173,6 @@ with actual persistence requirements.
   S3) or a fuse-style mount (rclone/s3fs) — the latter is a known
   reliability risk for a database file under concurrent access, so this
   needs a real decision when the time comes, not a default.
-- **Two more hand-built app instances** still wanted before a Layer 1
-  template or typed `Application` API for app onboarding (per D1) — this
-  doc should keep growing with each one.
+- **One more `Application`-track instance, two more `Database`-track
+  instances** still wanted before either earns a Layer 1 template or
+  typed API (per D1) — this doc should keep growing with each one.
