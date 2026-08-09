@@ -1,0 +1,10 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: personal-finance-dashboard
+  namespace: flux-system
+spec:
+  interval: 5m
+  url: https://github.com/lestherll/personal-finance-dashboard
+  ref:
+    branch: main

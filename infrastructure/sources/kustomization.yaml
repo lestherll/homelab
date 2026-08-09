@@ -4,3 +4,4 @@ resources:
   - helmrepository-tailscale.yaml
   - helmrepository-prometheus-community.yaml
   - gitrepository-fastapi-echo.yaml
+  - gitrepository-personal-finance-dashboard.yaml

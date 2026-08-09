@@ -5,3 +5,4 @@ resources:
   - tailscale-operator
   - observability
   - fastapi-echo
+  - personal-finance-dashboard
