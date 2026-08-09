@@ -36,7 +36,30 @@
     proto: tcp
     comment: "node-exporter — tailnet only"
 
-# Deliberately not touching ufw's enabled/disabled state or default policy here:
-# flipping that blind (without knowing every port this host already depends on,
-# e.g. SSH) risks a remote lockout. Enabling ufw, if desired, is left as an
-# explicit operator decision outside this role.
+# sshd listens on all interfaces on this host already (confirmed via `ss -tlnp`)
+# — kept open on all interfaces rather than scoped to tailscale0, so enabling
+# ufw doesn't change how this host is reached today (LAN, tailnet, wherever).
+- name: Allow SSH on all interfaces
+  community.general.ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+    comment: "ssh"
+
+# ufw's own default is DEFAULT_FORWARD_POLICY="DROP", which conflicts with k3s's
+# CNI (flannel): pod-to-pod and pod-to-internet traffic crosses the FORWARD chain
+# via cni0/flannel.1, and a DROP-by-default policy there breaks it. Not a real
+# segmentation loss — flannel doesn't enforce NetworkPolicy anyway (see k3s notes),
+# so FORWARD-DROP was never providing real pod-level isolation, just breakage risk.
+- name: Allow forwarded traffic by default (required for flannel/CNI)
+  ansible.builtin.lineinfile:
+    path: /etc/default/ufw
+    regexp: '^DEFAULT_FORWARD_POLICY='
+    line: 'DEFAULT_FORWARD_POLICY="ACCEPT"'
+  notify: reload ufw
+
+# Enabling only after the SSH-allow and forward-policy tasks above, so there's
+# no window where ufw is active without them.
+- name: Enable ufw
+  community.general.ufw:
+    state: enabled
