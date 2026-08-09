@@ -1,6 +1,8 @@
 # Re-verify the current chart version and the oauth/pre-created-secret precedence
 # against `helm show values tailscale/tailscale-operator` at implementation time
 # (plan §6) — confirmed the values below exist, not the exact fallback rules.
+# Chart version re-verified against https://pkgs.tailscale.com/helmcharts/index.yaml
+# as of 2026-08-09: 1.98.9.
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -11,6 +13,7 @@ spec:
   chart:
     spec:
       chart: tailscale-operator
+      version: "1.98.9"
       sourceRef:
         kind: HelmRepository
         name: tailscale
