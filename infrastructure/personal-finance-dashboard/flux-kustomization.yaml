@@ -1,0 +1,16 @@
+# Points at a *different* git repo (personal-finance-dashboard's own), not
+# this one — the app's manifests live entirely there (deploy/); this file is
+# just the pointer, kept minimal on purpose (see
+# gitrepository-personal-finance-dashboard.yaml for the source registration).
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: personal-finance-dashboard
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./deploy
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: personal-finance-dashboard

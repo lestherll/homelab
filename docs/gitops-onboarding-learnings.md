@@ -54,9 +54,42 @@ Identical every time, and so exactly what a template should absorb:
   but isn't the platform's actual intended answer — that's D2 (registry-
   watching reconciler + tag-bump commits), which isn't built yet.
 
+**Instance #2: `personal-finance-dashboard`**
+(github.com/lestherll/personal-finance-dashboard) — a `uv`-based Streamlit
+app with real state: a local data lake (DuckDB + parquet) that both a
+host-side CLI and the deployed app itself read and write (statement
+uploads happen through the running app, not just the CLI). First instance
+with actual persistence requirements.
+
+## What instance #2 adds to the "what varies" list
+
+- **Data persistence strategy.** Not present at all in instance #1
+  (stateless). Chosen here: a `hostPath` volume straight at the app repo's
+  own `data/` directory on this host, rather than a `local-path-provisioner`
+  PVC — because uploads through the app and edits through the host CLI need
+  to hit the *same* files, and a PVC copy would immediately diverge from
+  the host-side copy. Worth remembering: this cluster's only StorageClass
+  is also node-local disk under the hood, so hostPath vs. PVC is not a
+  resilience decision — either way, the actual mitigation for "the host
+  dies" is an off-host backup of the data path, which doesn't exist yet
+  for this app (same class of gap as D12's age-key backup).
+- **Pod `securityContext` (`runAsUser`/`runAsGroup`/`fsGroup`)`.** Needed
+  once a pod writes to a hostPath owned by the host user, to keep
+  upload-written files owned correctly instead of as `root`. Didn't come up
+  for instance #1 since it wrote nothing.
+- **Repo/image visibility as one combined decision, not two.** Considered
+  keeping the image public (as instance #1 did) while the source repo
+  stayed private — decided that was an inconsistent posture for an app
+  that's specifically about personal finances, and made both public
+  instead. Worth a template eventually asking "public or private" once,
+  not per-artifact.
+
 ## Status
 
 - `fastapi-echo` is live and verified end-to-end at
   `https://fastapi-echo.tailf4742d.ts.net`.
-- Two more hand-built instances are wanted before considering a Layer 1
+- `personal-finance-dashboard` deploy/ manifests and Flux wiring written;
+  not yet verified live (pending the repo going public and the first image
+  build).
+- One more hand-built instance is wanted before considering a Layer 1
   template or a typed `Application` API for app onboarding, per D1.
