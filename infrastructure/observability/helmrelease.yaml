@@ -53,6 +53,16 @@ spec:
       sidecar:
         dashboards:
           enabled: true
+      # Without this, /var/lib/grafana (dashboards, users, prefs) is an emptyDir
+      # — wiped on every pod restart/reschedule. type: pvc matches this chart's
+      # default single-replica Deployment mode (the chart's own commented
+      # example uses type: sts, which is only for multi-replica StatefulSet mode).
+      persistence:
+        enabled: true
+        type: pvc
+        storageClassName: local-path
+        accessModes: ["ReadWriteOnce"]
+        size: 1Gi
       resources:
         requests: { cpu: 50m, memory: 128Mi }
         limits: { cpu: 200m, memory: 256Mi }
