@@ -1,15 +1,25 @@
 # AGENT.md
 
 ## Description
-This repo is the declarative source of truth for a single-user homelab platform: a bare-metal Ubuntu host bootstrapped with Ansible into a k3s cluster, GitOps-managed by Flux, exposed over Tailscale, and observed via kube-prometheus-stack. Full product vision/rationale lives in `CONCEPT.md`. `PR.md` tracks the current review-findings-and-fixes cycle.
+This repo is the declarative source of truth for a single-user homelab platform: a bare-metal Ubuntu host bootstrapped with Ansible into a k3s cluster, GitOps-managed by Flux, exposed over Tailscale, and observed via kube-prometheus-stack. On top of that, a self-service typed platform API (kro) provisions `Database`/`ObjectStorage`/`Application` instances for other repos. Full product vision/rationale lives in `CONCEPT.md`.
 
 ## Repo layout
 - `ansible/` — host bootstrap and convergence (idempotent). `playbooks/converge.yml` runs roles in order: `host_prereqs` → `cli_tools` → `k3s_server` → `heartbeat_watchdog`. Inventory/vars in `ansible/inventory/hosts.ini`.
-- `infrastructure/` — Flux-managed Kubernetes manifests (HelmRepositories, HelmReleases, namespaces, SOPS-encrypted secrets), one subdirectory per component (`tailscale-operator/`, `observability/`, `sources/`).
-- `clusters/homelab/` — Flux's entrypoint Kustomization pointing at `infrastructure/`.
-- `CONCEPT.md` — the full product concept doc (principles, scope, users). Read this for *why*, not just *what*.
-- `PR.md` — running log of code-review findings and fix status for the current branch/PR.
-- `docs/` — supplementary notes, e.g. `gitops-onboarding-learnings.md` tracking what each hand-built app instance teaches before any onboarding template gets built (per `CONCEPT.md`'s D1 promotion rule).
+- `infrastructure/` — Flux-managed Kubernetes manifests (HelmRepositories, HelmReleases, namespaces, SOPS-encrypted secrets), one subdirectory per component:
+  - `tailscale-operator/`, `observability/`, `sources/`, `storage/` — platform scaffolding from Phase 0.
+  - `kro/` — the kro operator (`rbac.mode: aggregation`; its privilege doc is `platform-api/rbac-kro-aggregate.yaml`, extend it when a new kind is added to an RGD).
+  - `platform-api/` — the `Database`/`ObjectStorage`/`Application` `ResourceGraphDefinition`s (`platform.homelab/v1alpha1`), per decision D15.
+  - `postgres/` — CloudNativePG operator, backing every `Database` instance.
+  - `seaweedfs/` — SeaweedFS operator + HelmRelease.
+  - `seaweedfs-runtime/` — the `Seaweed` cluster/`ResourceReferenceGrant`/`PodMonitor`s, deliberately its **own** Flux Kustomization (`dependsOn: [infrastructure]`) — see `docs/self-service-platform-design-notes.md`'s Implementation log for why pairing a HelmRelease with CRD-dependent raw manifests in the same Kustomization deadlocks on cold apply.
+  - `fastapi-echo/`, `personal-finance-dashboard/` — per-app Flux pointer objects (`GitRepository`+`Kustomization`) for apps whose manifests live in their own repos.
+- `clusters/homelab/` — Flux's entrypoint Kustomizations, pointing at `infrastructure/` (and, separately, `infrastructure/seaweedfs-runtime/`).
+- `CONCEPT.md` — the full product concept doc (principles, scope, users, decisions D1–D16). Read this for *why*, not just *what*.
+- `docs/` — supplementary notes:
+  - `gitops-onboarding-learnings.md` — what each hand-built app/data-service instance taught, per D1's promotion rule (superseded for `Database`/`ObjectStorage`/`Application` by D15's pivot, noted inline).
+  - `self-service-platform-design-notes.md` — full design + build record for D15/D16, including a detailed implementation log of every gotcha hit building the platform API.
+  - `platform-api-usage.md` — practical field reference for onboarding/migrating an app onto `Database`/`ObjectStorage`/`Application`.
+  - `message-broker-design-notes.md` — exploratory notes on a future message-broker data service; not built, not scheduled.
 
 ## Key operational facts
 - **Ansible privilege escalation is broken on this host.** Ubuntu 26.04's `sudo-rs` doesn't match Ansible's become-prompt regex (see the comment block in `ansible.cfg`). Always invoke playbooks wrapped in a top-level `sudo`, not `-K`:
@@ -29,4 +39,4 @@ This repo is the declarative source of truth for a single-user homelab platform:
 
 ## Notes
 - Verify idempotency after Ansible role changes by re-running the same `--tags` and checking for `changed=0` in the recap before assuming a fix is "live."
-- `PR.md` should be kept current as findings get fixed — it's the working checklist, not a historical artifact.
+- A new kind added to any `ResourceGraphDefinition` under `platform-api/` needs a matching grant in `platform-api/rbac-kro-aggregate.yaml`, or kro reconciliation fails with a permission error.
