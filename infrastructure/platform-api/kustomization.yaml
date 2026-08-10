@@ -5,4 +5,5 @@ resources:
   # the RGDs go active, or the first reconcile fails on permissions.
   - rbac-kro-aggregate.yaml
   - rgd-database.yaml
+  - rgd-objectstorage.yaml
   - rgd-application.yaml

@@ -1,0 +1,85 @@
+# ObjectStorage — a resource API, symmetric in shape to Database but not in
+# sharing model. It provisions exactly one SeaweedFS Bucket and knows nothing
+# about consumers; Application attaches to it by name (rgd-application.yaml).
+#
+# UNLIKE Database, ObjectStorage IS meant to be shared: exactly one instance
+# exists per bucket, and every consumer — including the first — gets its own
+# isolated S3Identity/S3Credentials/prefix-scoped S3Policy via Application's
+# forEach (rgd-application.yaml). A second app wanting the same bucket adds
+# an objectStorage entry referencing this instance by name; it does not
+# declare a second ObjectStorage. Declaring one twice would render two
+# Bucket CRs resolving to the same underlying S3 name, which fails
+# BucketAlreadyExists — adoptExisting only reclaims a CR's own prior bucket,
+# never a sibling's.
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: objectstorage
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: ObjectStorage
+    group: platform.homelab
+    spec: {}
+    status:
+      # Read by rgd-application.yaml's objectStorage attachment resolution —
+      # without this field existing, that side has nothing to read.
+      bucketName: ${bucket.status.bucketName}
+      phase: ${bucket.status.phase}
+    additionalPrinterColumns:
+      - name: State
+        type: string
+        jsonPath: .status.state
+      - name: Ready
+        type: string
+        jsonPath: .status.conditions[?(@.type=="Ready")].status
+      - name: Bucket
+        type: string
+        jsonPath: .status.bucketName
+      - name: Phase
+        type: string
+        jsonPath: .status.phase
+      - name: Age
+        type: date
+        jsonPath: .metadata.creationTimestamp
+  resources:
+    - id: bucket
+      readyWhen:
+        - ${bucket.status.phase == "Ready"}
+      template:
+        apiVersion: seaweed.seaweedfs.com/v1
+        kind: Bucket
+        metadata:
+          # k8s object name — namespaced by Kubernetes itself, no collision
+          # risk between two apps both naming their instance "data".
+          name: ${schema.metadata.name}
+          namespace: ${schema.metadata.namespace}
+        spec:
+          # The real S3 bucket name — globally unique across the cluster,
+          # unlike metadata.name. Bucket's own naming rules (confirmed
+          # against the CRD: 3-63 chars, lowercase alphanumeric/hyphen/dot,
+          # no consecutive dots, not IPv4-shaped) apply to this derived
+          # value.
+          #
+          # NOT schema-enforced, checked here rather than assumed: kro
+          # v0.9.3's SimpleSchema validation markers (required/pattern/
+          # minLength/etc.) attach to spec/status fields, not to
+          # metadata.name, and ObjectStorage's spec is intentionally empty —
+          # there is no field to hang a length check on. A namespace+name
+          # combination producing an illegal S3 name fails at Bucket-create
+          # time with a clear admission error (the Bucket CRD's own CEL
+          # validates this), not silently — but it is a runtime failure, not
+          # a `kubectl apply`-time one. Given this cluster's short,
+          # human-chosen namespace and instance names, treated as an
+          # accepted, documented gap rather than one worth deeper CEL
+          # machinery — same "review discipline over webhook" reasoning as
+          # Database's 1:1-consumer convention.
+          name: ${schema.metadata.namespace + "-" + schema.metadata.name}
+          clusterRef:
+            name: seaweed
+            namespace: seaweedfs
+          # Safe unconditionally: the bucket name above is always derived
+          # from this CR's own namespace+name, so this can only ever adopt
+          # a bucket it created itself on a prior reconcile (the Retain-
+          # then-recreate recovery path) — never a sibling's.
+          adoptExisting: true

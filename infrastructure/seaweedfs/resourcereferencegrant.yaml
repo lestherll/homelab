@@ -1,0 +1,56 @@
+# Permits Bucket / S3Identity / S3Credentials / S3Policy / S3PolicyBinding
+# objects in any namespace labelled platform.homelab/seaweedfs-access: "true"
+# to reference the shared Seaweed cluster above.
+#
+# That label is a security-sensitive capability grant, not decoration —
+# possessing it is what lets a namespace's objects resolve their clusterRef/
+# seaweedRef at all. Acceptable without finer-grained control under this
+# repo's single-user/no-multi-tenancy scope (same reasoning already applied
+# to Postgres in rgd-database.yaml), but named here as what it actually is.
+#
+# ResourceReferenceGrant.spec.from's Kind field is singular per entry
+# (confirmed against the CRD's Go source, api/v1/resourcereferencegrant_types.go)
+# — there is no way to list multiple kinds under one From block, so "one
+# grant naming all five kinds" means five From entries sharing the same
+# namespaceSelector, not one entry with a kind list. Missing one here is the
+# exact failure mode an earlier draft of this design caught by reading source
+# instead of trusting prose (it had listed three kinds, not five).
+apiVersion: seaweed.seaweedfs.com/v1
+kind: ResourceReferenceGrant
+metadata:
+  name: platform-api-access
+  namespace: seaweedfs
+spec:
+  from:
+    - group: seaweed.seaweedfs.com
+      kind: Bucket
+      namespaceSelector:
+        matchLabels:
+          platform.homelab/seaweedfs-access: "true"
+    - group: seaweed.seaweedfs.com
+      kind: S3Identity
+      namespaceSelector:
+        matchLabels:
+          platform.homelab/seaweedfs-access: "true"
+    - group: seaweed.seaweedfs.com
+      kind: S3Credentials
+      namespaceSelector:
+        matchLabels:
+          platform.homelab/seaweedfs-access: "true"
+    - group: seaweed.seaweedfs.com
+      kind: S3Policy
+      namespaceSelector:
+        matchLabels:
+          platform.homelab/seaweedfs-access: "true"
+    - group: seaweed.seaweedfs.com
+      kind: S3PolicyBinding
+      namespaceSelector:
+        matchLabels:
+          platform.homelab/seaweedfs-access: "true"
+  to:
+    # Name pinned — this grant trusts a reference to this one cluster, not
+    # every Seaweed cluster that might ever exist in this namespace (there is
+    # only one today, but the grant should say so rather than leave it implicit).
+    - group: seaweed.seaweedfs.com
+      kind: Seaweed
+      name: seaweed

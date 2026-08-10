@@ -1,0 +1,86 @@
+# Hand-managed PodMonitors for every component, deliberately not relying on
+# the operator's own auto-provisioned ServiceMonitors.
+#
+# Confirmed against the operator's Go source (internal/controller/*_servicemonitor.go):
+# setting metricsPort causes S3 (and SFTP, not deployed here) to auto-create a
+# ServiceMonitor — master/volume/filer/admin/worker do not, contrary to an
+# earlier draft's guess of "s3 and admin". More importantly, every
+# auto-created one — including S3's — carries only the operator's fixed
+# app.kubernetes.io/* labels, with no way to add
+# `release: kube-prometheus-stack`, so none of them are ever selected by this
+# cluster's Prometheus (podMonitorSelector.matchLabels: {release:
+# kube-prometheus-stack}) regardless of which components happen to auto-
+# provision one. Hand-writing all four here, uniformly, is simpler than
+# tracking that inconsistency — same pattern the Database RGD already uses
+# for CNPG.
+#
+# Selector labels and container port names both confirmed against source
+# (internal/controller/label/label.go and the *_statefulset.go /
+# *_service.go files respectively), not assumed from the CR schema.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: seaweed-master
+  namespace: seaweedfs
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/managed-by: seaweedfs-operator
+      app.kubernetes.io/name: seaweedfs
+      app.kubernetes.io/component: master
+      app.kubernetes.io/instance: seaweed
+  podMetricsEndpoints:
+    - port: master-metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: seaweed-volume
+  namespace: seaweedfs
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/managed-by: seaweedfs-operator
+      app.kubernetes.io/name: seaweedfs
+      app.kubernetes.io/component: volume
+      app.kubernetes.io/instance: seaweed
+  podMetricsEndpoints:
+    - port: volume-metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: seaweed-filer
+  namespace: seaweedfs
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/managed-by: seaweedfs-operator
+      app.kubernetes.io/name: seaweedfs
+      app.kubernetes.io/component: filer
+      app.kubernetes.io/instance: seaweed
+  podMetricsEndpoints:
+    - port: filer-metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: seaweed-s3
+  namespace: seaweedfs
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/managed-by: seaweedfs-operator
+      app.kubernetes.io/name: seaweedfs
+      app.kubernetes.io/component: s3
+      app.kubernetes.io/instance: seaweed
+  podMetricsEndpoints:
+    - port: s3-metrics

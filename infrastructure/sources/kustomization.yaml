@@ -7,3 +7,4 @@ resources:
   - gitrepository-personal-finance-dashboard.yaml
   - helmrepository-cloudnative-pg.yaml
   - helmrepository-kro.yaml
+  - helmrepository-seaweedfs-operator.yaml

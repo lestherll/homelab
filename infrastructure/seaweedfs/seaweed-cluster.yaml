@@ -1,0 +1,102 @@
+# One shared Seaweed cluster — the "seaweedfs" analogue of the shared
+# CloudNativePG operator: platform-owned infrastructure, not a self-service
+# type. ObjectStorage instances (infrastructure/platform-api/rgd-objectstorage.yaml)
+# provision Buckets against this cluster by name.
+#
+# Server image pinned explicitly — chrislusf/seaweedfs is still the
+# canonical published image (confirmed against the operator's own README and
+# sample manifests); re-verified against
+# https://github.com/seaweedfs/seaweedfs/releases as of 2026-08-10: latest
+# stable is 4.41.
+apiVersion: seaweed.seaweedfs.com/v1
+kind: Seaweed
+metadata:
+  name: seaweed
+  namespace: seaweedfs
+spec:
+  image: chrislusf/seaweedfs:4.41
+
+  master:
+    replicas: 1
+    # metricsPort only enables a Prometheus scrape endpoint on the pod — it
+    # does NOT by itself get this cluster's Prometheus to scrape it (see
+    # the PodMonitors below, and the comment on those for why). Picked from
+    # a plain sequential block (9410-9413), deliberately not reusing any of
+    # the operator's documented default HTTP/gRPC ports (9333, 8444, 8888,
+    # 8333, 8181, 23646, 9101, 2222) to avoid inviting a misread.
+    metricsPort: 9410
+    # NOT COSMETIC — the cluster does not work without this. Left unset, the
+    # build's own default (visible in its startup banner as "30GB") produces
+    # a Max of only 2 writable volume slots on this node's disk, and
+    # SeaweedFS assigns volumes per-collection (one Bucket = one collection).
+    # The first bucket claims both slots at cluster bootstrap, so every
+    # subsequent bucket's first write fails with "No writable volumes and no
+    # free volumes left" — a 500 InternalError from the S3 API, not an
+    # AccessDenied, so it doesn't even look like a quota problem. Reproduced
+    # and root-caused against a live cluster (dir/status showed Max: 2,
+    # Free: 0) before this value was set; confirmed fixed afterwards
+    # (Max: 604, Free: 602 against this node's actual free disk — local-path
+    # PVCs aren't quota-enforced, so SeaweedFS sees the whole node's free
+    # space divided by this value, not the 5Gi volume.requests below).
+    # 100 keeps each volume container small enough to give real multi-bucket
+    # headroom on a homelab-sized disk — this caps the size SeaweedFS rolls a
+    # volume container over at, not the size of an individual stored object
+    # (large files are chunked across volumes by the filer regardless), but
+    # that chunking behavior was not itself re-verified here — worth an
+    # explicit test the first time a genuinely large object is stored.
+    volumeSizeLimitMB: 100
+
+  # PVC-backed, on local-path-retain: volume data is the platform's own
+  # analogue of a Postgres PGDATA volume — losing it loses every object in
+  # every bucket. Labelled durable for the same reason CNPG's storage is
+  # (D4), so unlabelled-volume alerting (once built) doesn't miss it.
+  volume:
+    replicas: 1
+    requests:
+      storage: 5Gi
+    storageClassName: local-path-retain
+    labels:
+      platform.homelab/durability: durable
+    metricsPort: 9411
+
+  filer:
+    replicas: 1
+    # Metadata store: same leveldb2 shape the operator's own sample uses.
+    config: |
+      [leveldb2]
+      enabled = true
+      dir = "/data/filerldb2"
+    # Filer metadata (bucket registry, directory structure) is as load-
+    # bearing as the volume data above — without persistence it lives only
+    # in the pod's writable layer and is lost on every restart. Same
+    # durability treatment as volume, above.
+    persistence:
+      enabled: true
+      storageClassName: local-path-retain
+      resources:
+        requests:
+          storage: 1Gi
+      labels:
+        platform.homelab/durability: durable
+    metricsPort: 9412
+    # filer.s3 (embedded S3+IAM on the filer itself) is deliberately left
+    # unset. spec.s3 below is the standalone-Deployment gateway — the
+    # operator's own doc comment says to prefer it for new clusters, since
+    # embedded filer S3 cannot scale independently and is being phased out.
+
+  # Standalone S3 gateway — the recommended path, not filer.s3.enabled.
+  # IAM defaults to true (embedded on this same port), which is what makes
+  # S3Identity/S3Credentials/S3Policy/S3PolicyBinding work at all.
+  s3:
+    replicas: 1
+    metricsPort: 9413
+    # Setting metricsPort here also makes the operator auto-provision a
+    # ServiceMonitor (confirmed in the operator's Go source — S3 and SFTP
+    # are the only two components documented to do this). It is left in
+    # place rather than suppressed — there's no field to disable it — but
+    # it carries only the operator's fixed app.kubernetes.io/* labels, not
+    # this cluster's required `release: kube-prometheus-stack`, so it is
+    # never selected by Prometheus. It's inert, not wrong; the PodMonitors
+    # below are what actually get this cluster scraped, for every
+    # component uniformly, matching the Database RGD's own PodMonitor
+    # rather than leaning on inconsistent per-component operator behavior.

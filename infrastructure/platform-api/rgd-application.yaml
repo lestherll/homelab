@@ -1,17 +1,25 @@
 # Application — the consumer side of the platform API.
 #
-# Database (and later ObjectStorage) are *resource* APIs: they provision
-# infrastructure and know nothing about consumers. Application's `databases`
-# list is an *attachment* API: "consume that resource, with credentials wired
-# in for me." Keeping the two separate is what lets future types
-# (CodingEnvironment, batch workloads) adopt the same attachment shape without
-# touching either resource API.
+# Database/ObjectStorage are *resource* APIs: they provision infrastructure
+# and know nothing about consumers. Application's `databases`/`objectStorage`
+# lists are an *attachment* API: "consume that resource, with credentials
+# wired in for me." Keeping the two separate is what lets future types
+# (CodingEnvironment, batch workloads) adopt the same attachment shape later
+# without touching either resource API.
 #
-# Attachments are lists with aliases from day one, even though every app today
-# has exactly one database. A single-attachment app writes a one-item list.
+# Attachments are lists with aliases from day one, even on an app with
+# exactly one of something. A single-attachment app writes a one-item list.
 # The group/version below is a one-way door, so the shape that avoids a
 # cliff-edge migration on the day an app grows a second attachment has to be
 # chosen now, not later.
+#
+# REVISION HISTORY (kro re-reconciles every existing instance against a new
+# revision — this is itself evidence for "additive evolution is cheap"):
+#   rev 1 — databases only (fastapi-echo's migration).
+#   rev 2 — adds objectStorage, securityContext, persistence, all optional
+#           and additive. fastapi-echo's existing instance is expected to
+#           reconcile unchanged under this revision — confirmed as part of
+#           this PR's own verification, not assumed.
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
@@ -33,6 +41,20 @@ spec:
         # a pre-existing Secret instead.
         externalSecretName: string | description="wire from this existing Secret instead of a managed Database"
         externalSecretKey: string | default="uri" description="key within externalSecretName"
+      ObjectStorageAttachment:
+        ref: string | required=true description="metadata.name of an ObjectStorage in this namespace"
+        # Same alias contract as DatabaseAttachment — becomes
+        # S3_ENDPOINT_<ALIAS>/S3_BUCKET_<ALIAS>/AWS_ACCESS_KEY_ID_<ALIAS>/
+        # AWS_SECRET_ACCESS_KEY_<ALIAS>, and the <appname>-<alias> prefix this
+        # consumer is scoped to within the bucket.
+        as: string | required=true pattern="^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" description="alias; becomes S3_*_<ALIAS>, and the app's key prefix within the bucket"
+      SecurityContext:
+        runAsUser: integer | description="pod-level runAsUser; omit to leave unset"
+        runAsGroup: integer | description="pod-level runAsGroup; omit to leave unset"
+        fsGroup: integer | description="pod-level fsGroup; omit to leave unset"
+      Persistence:
+        hostPath: string | required=true description="host directory to bind-mount, e.g. /home/lestherll/projects/<app>/data"
+        mountPath: string | default="/app/data" description="path inside the container the hostPath is mounted at"
     spec:
       image: string | required=true
       port: integer | default=8000
@@ -40,6 +62,13 @@ spec:
       probePath: string | default="/healthz"
       size: string | enum="small,medium" default="small"
       databases: "[]DatabaseAttachment"
+      objectStorage: "[]ObjectStorageAttachment"
+      # Both optional custom-type fields below: a plain single-node-cluster
+      # app (fastapi-echo) sets neither. Rendering is gated with has(...) in
+      # the Deployment template — see the comment there for why a bare
+      # ternary doesn't type-check in kro's CEL and dyn() is needed.
+      securityContext: SecurityContext
+      persistence: Persistence
     status:
       url: ${ingress.status.loadBalancer.ingress[0].hostname}
       availableReplicas: ${deployment.status.availableReplicas}
@@ -50,18 +79,27 @@ spec:
       # condition reading as authoritative while being shadowed in every
       # default table view. Verified during the LES-56 spike; named distinctly
       # so the two can't be confused.
-      attachmentsResolved: ${schema.spec.databases.all(d, has(d.externalSecretName) || size(databasesInNs.filter(x, x.metadata.name == d.ref)) > 0)}
-      # Deliberately NOT unresolvedDatabaseRefs. Printer columns cannot be
-      # revised after the CRD is created (see the block below), so this is a
-      # single combined list from the start — when objectStorage attachments
-      # are added, they extend this expression rather than needing a new
-      # column that could never be added.
-      unresolvedRefs: ${schema.spec.databases.filter(d, !has(d.externalSecretName) && size(databasesInNs.filter(x, x.metadata.name == d.ref)) == 0).map(d, d.ref)}
-    # CREATE-TIME ONLY — see the equivalent note in rgd-database.yaml. These
-    # cannot be corrected without deleting the CRD and every Application with
-    # it. The Resolved and Unresolved columns exist because kro's own Ready
-    # column cannot answer "did the refs resolve", which is the failure mode
-    # this API is most likely to hit in practice.
+      attachmentsResolved: >-
+        ${schema.spec.databases.all(d, has(d.externalSecretName) ||
+            size(databasesInNs.filter(x, x.metadata.name == d.ref)) > 0) &&
+          schema.spec.objectStorage.all(o,
+            size(objectStorageInNs.filter(x, x.metadata.name == o.ref)) > 0)}
+      # One combined list across both attachment types, not
+      # unresolvedDatabaseRefs/unresolvedObjectStorageRefs split in two.
+      # Printer columns can't be added after the CRD is first created (see
+      # below), so this had to be the shape from revision 1 — extending the
+      # CEL here in revision 2 costs nothing; a second column would have
+      # been unaddable.
+      unresolvedRefs: >-
+        ${schema.spec.databases.filter(d, !has(d.externalSecretName) &&
+            size(databasesInNs.filter(x, x.metadata.name == d.ref)) == 0).map(d, d.ref) +
+          schema.spec.objectStorage.filter(o,
+            size(objectStorageInNs.filter(x, x.metadata.name == o.ref)) == 0).map(o, o.ref)}
+    # CREATE-TIME ONLY — kro applies these when it first creates the CRD; on
+    # an adopted CRD (which is what happens on every subsequent RGD revision,
+    # since the CRD itself survives) changes here are silently ignored.
+    # Confirmed during the LES-56 spike. These were therefore designed once,
+    # for the columns this API needs across both revisions, not revised here.
     additionalPrinterColumns:
       - name: State
         type: string
@@ -82,23 +120,142 @@ spec:
         type: date
         jsonPath: .metadata.creationTimestamp
   resources:
-    # Attachment resolution, part 1 of 2: a collection externalRef fetching
-    # every Database in this instance's namespace.
-    #
-    # kro forbids forEach and externalRef on the same resource entry, so the
-    # lookup and the loop have to be separate entries — this one does the
-    # lookup, the Deployment's CEL does the matching.
-    #
-    # `namespace` is NOT optional here. kro lists across ALL namespaces when it
-    # is omitted on a collection ref, which would let one app's Application
-    # resolve another app's Database and wire in its credentials.
+    # Attachment resolution, database side (unchanged from revision 1): a
+    # collection externalRef fetching every Database in this instance's
+    # namespace. `namespace` is NOT optional — see the original comment
+    # preserved below.
     - id: databasesInNs
       externalRef:
         apiVersion: platform.homelab/v1alpha1
         kind: Database
         metadata:
+          # kro lists across ALL namespaces when this is omitted on a
+          # collection ref, which would let one app's Application resolve
+          # another app's Database and wire in its credentials.
           namespace: ${schema.metadata.namespace}
           selector: {}
+
+    # Attachment resolution, object-storage side. Same shape as above — kro
+    # forbids forEach and externalRef on the same resource entry, so this
+    # collection ref is its own entry; the S3Identity/S3Credentials/S3Policy/
+    # S3PolicyBinding forEach below and the Deployment's env CEL both match
+    # against this fetched collection rather than doing their own lookup.
+    - id: objectStorageInNs
+      externalRef:
+        apiVersion: platform.homelab/v1alpha1
+        kind: ObjectStorage
+        metadata:
+          namespace: ${schema.metadata.namespace}
+          selector: {}
+
+    # One S3Identity + S3Credentials + S3Policy + S3PolicyBinding set per
+    # objectStorage[] entry — this is where forEach earns its keep, since
+    # each attachment needs FOUR separate Kubernetes objects, not just an
+    # env-var entry within one shared object (contrast with databases, which
+    # only need the latter).
+    #
+    # Every consumer gets the same <app>-<alias>/* prefix scoping, including
+    # a bucket's first and only consumer — no "full access for whoever got
+    # there first." An Application instance only ever sees its own spec, with
+    # no way to know whether it's the first attachment to a given
+    # ObjectStorage, so uniform scoping is also the only implementable
+    # option, not merely the fairest one.
+    #
+    # IAM identity/policy names are GLOBAL to the Seaweed cluster (confirmed
+    # against the operator's Go source), unlike Kubernetes object names —
+    # hence the namespace prefix on spec.name below. S3Credentials/
+    # S3PolicyBinding have no such global-name field; their own
+    # metadata.name only needs to be unique within this namespace.
+    - id: s3Identities
+      forEach:
+        - attachment: ${schema.spec.objectStorage}
+      template:
+        apiVersion: seaweed.seaweedfs.com/v1
+        kind: S3Identity
+        metadata:
+          name: ${schema.metadata.namespace + "-" + schema.metadata.name + "-" + attachment.as}
+          namespace: ${schema.metadata.namespace}
+        spec:
+          seaweedRef:
+            name: seaweed
+            namespace: seaweedfs
+
+    - id: s3Credentials
+      forEach:
+        - attachment: ${schema.spec.objectStorage}
+      template:
+        apiVersion: seaweed.seaweedfs.com/v1
+        kind: S3Credentials
+        metadata:
+          name: ${schema.metadata.name + "-" + attachment.as + "-s3"}
+          namespace: ${schema.metadata.namespace}
+        spec:
+          seaweedRef:
+            name: seaweed
+            namespace: seaweedfs
+          identityRef:
+            # Recomputed rather than read back from s3Identities — the name
+            # is a pure function of (namespace, app name, alias), so there's
+            # no need for a cross-collection dependency here.
+            name: ${schema.metadata.namespace + "-" + schema.metadata.name + "-" + attachment.as}
+          # Pinned explicitly rather than left to the operator's own default
+          # (which happens to match "accessKey"/"secretKey" today) — a
+          # future operator upgrade that changes the default fails loudly at
+          # apply time instead of silently breaking every Application.
+          secretRef:
+            accessKeyField: accessKey
+            secretKeyField: secretKey
+
+    - id: s3Policies
+      forEach:
+        - attachment: ${schema.spec.objectStorage}
+      template:
+        apiVersion: seaweed.seaweedfs.com/v1
+        kind: S3Policy
+        metadata:
+          name: ${schema.metadata.namespace + "-" + schema.metadata.name + "-" + attachment.as}
+          namespace: ${schema.metadata.namespace}
+        spec:
+          seaweedRef:
+            name: seaweed
+            namespace: seaweedfs
+          # policyDocument, not statements: S3PolicyStatement (the
+          # structured form) has no condition field, so an s3:prefix-scoped
+          # ListBucket grant — required for the prefix isolation this whole
+          # design rests on — is only expressible as raw policy JSON.
+          # Confirmed against the CRD's Go source, not assumed from AWS IAM
+          # docs in general.
+          policyDocument: >-
+            ${'{"Version":"2012-10-17","Statement":[' +
+              '{"Effect":"Allow","Action":["s3:ListBucket"],' +
+              '"Resource":["arn:aws:s3:::' +
+              objectStorageInNs.filter(o, o.metadata.name == attachment.ref).map(o, o.status.bucketName).join("") +
+              '"],"Condition":{"StringLike":{"s3:prefix":["' +
+              schema.metadata.name + "-" + attachment.as + '/*"]}}},' +
+              '{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject"],' +
+              '"Resource":["arn:aws:s3:::' +
+              objectStorageInNs.filter(o, o.metadata.name == attachment.ref).map(o, o.status.bucketName).join("") +
+              '/' + schema.metadata.name + "-" + attachment.as + '/*"]}' +
+              ']}'}
+
+    - id: s3PolicyBindings
+      forEach:
+        - attachment: ${schema.spec.objectStorage}
+      template:
+        apiVersion: seaweed.seaweedfs.com/v1
+        kind: S3PolicyBinding
+        metadata:
+          name: ${schema.metadata.name + "-" + attachment.as}
+          namespace: ${schema.metadata.namespace}
+        spec:
+          seaweedRef:
+            name: seaweed
+            namespace: seaweedfs
+          policyRef:
+            name: ${schema.metadata.namespace + "-" + schema.metadata.name + "-" + attachment.as}
+          subjects:
+            - kind: S3Identity
+              name: ${schema.metadata.namespace + "-" + schema.metadata.name + "-" + attachment.as}
 
     - id: deployment
       template:
@@ -117,6 +274,23 @@ spec:
               labels:
                 app: ${schema.metadata.name}
             spec:
+              # Optional, additive (revision 2). has(...) alone does not
+              # type-check here — a bare ternary between a typed value and
+              # `null` fails kro's static type checker with a type-mismatch
+              # error (confirmed empirically: "found no matching overload
+              # for '_?_:_'"), because CEL requires both ternary branches to
+              # share a type and `null` isn't unifiable with `int`. dyn(...)
+              # on both branches sidesteps that by making the ternary's
+              # result type dyn, matching how kro itself resolves fields
+              # against the real corev1 struct shape. Verified against a
+              # live cluster: an instance with no securityContext set
+              # renders {} on the pod (Kubernetes treats that identically to
+              # the field being absent); one with it set renders exactly the
+              # three values.
+              securityContext:
+                runAsUser: '${has(schema.spec.securityContext) ? dyn(schema.spec.securityContext.runAsUser) : dyn(null)}'
+                runAsGroup: '${has(schema.spec.securityContext) ? dyn(schema.spec.securityContext.runAsGroup) : dyn(null)}'
+                fsGroup: '${has(schema.spec.securityContext) ? dyn(schema.spec.securityContext.fsGroup) : dyn(null)}'
               containers:
                 - name: ${schema.metadata.name}
                   image: ${schema.spec.image}
@@ -125,20 +299,25 @@ spec:
                   imagePullPolicy: Always
                   ports:
                     - containerPort: ${schema.spec.port}
-                  # Attachment resolution, part 2 of 2. One CEL map over the
-                  # attachment list — no forEach needed, because this produces
-                  # entries within a single object rather than stamping out
-                  # multiple Kubernetes objects.
+                  # Attachment resolution, part 2 of 2 for databases, and the
+                  # whole story for objectStorage's env wiring (its four
+                  # rendered IAM objects come from the forEach blocks above;
+                  # this only wires the resulting Secret/derived values into
+                  # env vars). No forEach needed for either half — this
+                  # produces entries within the one Deployment object, not
+                  # separate Kubernetes objects.
                   #
-                  # Explicit `env` with a single-key secretKeyRef, never
-                  # envFrom: CloudNativePG's <cluster>-app Secret carries
-                  # host/user/password/dbname alongside uri, and envFrom would
-                  # dump all of them into the container as bare variables.
+                  # Explicit env with single-key secretKeyRefs throughout,
+                  # never envFrom — CloudNativePG's <cluster>-app Secret
+                  # carries host/user/password/dbname alongside uri, and
+                  # envFrom would dump all of them as bare variables.
                   #
-                  # Always alias-suffixed, with no bare-name special case for a
-                  # one-item list. A bare DATABASE_URL would have to disappear
-                  # the day a second attachment is added — a migration cliff
-                  # disguised as a convenience.
+                  # Always alias-suffixed on both sides, no bare-name special
+                  # case for a one-item list — a bare DATABASE_URL or
+                  # AWS_ACCESS_KEY_ID would have to disappear the day a
+                  # second attachment is added, and an SDK's default
+                  # credential chain has no way to know which of two buckets
+                  # a bare var would mean anyway.
                   env: >-
                     ${schema.spec.databases.map(d, {
                       "name": "DATABASE_URL_" + d.as.upperAscii().replace("-", "_"),
@@ -148,7 +327,34 @@ spec:
                           "key": has(d.externalSecretName) ? d.externalSecretKey : "uri"
                         }
                       }
-                    })}
+                    }) + schema.spec.objectStorage.map(o, [
+                      {
+                        "name": "S3_ENDPOINT_" + o.as.upperAscii().replace("-", "_"),
+                        "value": "http://seaweed-s3.seaweedfs.svc:8333"
+                      },
+                      {
+                        "name": "S3_BUCKET_" + o.as.upperAscii().replace("-", "_"),
+                        "value": objectStorageInNs.filter(x, x.metadata.name == o.ref).map(x, x.status.bucketName).join("")
+                      },
+                      {
+                        "name": "AWS_ACCESS_KEY_ID_" + o.as.upperAscii().replace("-", "_"),
+                        "valueFrom": {
+                          "secretKeyRef": {
+                            "name": schema.metadata.name + "-" + o.as + "-s3",
+                            "key": "accessKey"
+                          }
+                        }
+                      },
+                      {
+                        "name": "AWS_SECRET_ACCESS_KEY_" + o.as.upperAscii().replace("-", "_"),
+                        "valueFrom": {
+                          "secretKeyRef": {
+                            "name": schema.metadata.name + "-" + o.as + "-s3",
+                            "key": "secretKey"
+                          }
+                        }
+                      }
+                    ]).flatten()}
                   readinessProbe:
                     httpGet:
                       path: ${schema.spec.probePath}
@@ -168,6 +374,29 @@ spec:
                     limits:
                       cpu: '${schema.spec.size == "small" ? "200m" : "1000m"}'
                       memory: '${schema.spec.size == "small" ? "128Mi" : "1Gi"}'
+                  # Optional, additive (revision 2). Lists turn out to need
+                  # the same dyn() treatment objects do: an all-string map
+                  # literal like {"name":..., "mountPath":...} infers as
+                  # map(string,string), and kro's type checker still
+                  # unifies that against the real VolumeMount struct (which
+                  # has a bool readOnly field) even inside a list — the
+                  # empty-list branch doesn't save it. Confirmed
+                  # empirically after the object case's dyn() fix didn't
+                  # extend to lists on its own.
+                  volumeMounts: >-
+                    ${dyn(has(schema.spec.persistence) ? [{
+                      "name": "data",
+                      "mountPath": schema.spec.persistence.mountPath
+                    }] : [])}
+              volumes: >-
+                ${dyn(has(schema.spec.persistence) ? [{
+                  "name": "data",
+                  "hostPath": {
+                    "path": schema.spec.persistence.hostPath,
+                    "type": "Directory"
+                  }
+                }] : [])}
+
     - id: service
       template:
         apiVersion: v1
