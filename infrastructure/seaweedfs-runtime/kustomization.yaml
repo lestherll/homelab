@@ -1,0 +1,9 @@
+# Reconciled by its OWN Flux Kustomization
+# (clusters/homelab/infrastructure-seaweedfs-runtime.yaml), not by the root
+# `infrastructure` one — see that file's header comment for why.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - seaweed-cluster.yaml
+  - resourcereferencegrant.yaml
+  - podmonitors.yaml
