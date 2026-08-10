@@ -61,8 +61,18 @@ spec:
       host: string | required=true description="Tailscale hostname, without the tailnet suffix"
       probePath: string | default="/healthz"
       size: string | enum="small,medium" default="small"
-      databases: "[]DatabaseAttachment"
-      objectStorage: "[]ObjectStorageAttachment"
+      # default=[] is required, not cosmetic — an app that omits this field
+      # entirely (any app with no database, or the fastapi-echo/PFD cases
+      # with no object storage / no database respectively) would otherwise
+      # leave schema.spec.databases genuinely absent from the stored object,
+      # and every CEL expression below that reads it (.map()/.filter()/
+      # .all(), and both forEach blocks) fails at reconcile time with
+      # "no such key: databases" — not a compile-time error, so it passed
+      # GraphAccepted and only surfaced as ResourcesReady: False on the
+      # first real instance that omitted the field. Confirmed against a live
+      # cluster: default=[] makes kro populate a real empty list instead.
+      databases: "[]DatabaseAttachment | default=[]"
+      objectStorage: "[]ObjectStorageAttachment | default=[]"
       # Both optional custom-type fields below: a plain single-node-cluster
       # app (fastapi-echo) sets neither. Rendering is gated with has(...) in
       # the Deployment template — see the comment there for why a bare
@@ -318,6 +328,18 @@ spec:
                   # second attachment is added, and an SDK's default
                   # credential chain has no way to know which of two buckets
                   # a bare var would mean anyway.
+                  #
+                  # Each objectStorage[] entry also gets S3_PREFIX_<ALIAS> —
+                  # the exact key prefix that entry's S3Policy actually scopes
+                  # access to. Not just documentation: a bare HeadBucket/
+                  # ListBucket with no prefix is correctly AccessDenied under
+                  # the prefix-conditioned policy (confirmed live — this is
+                  # the isolation working as designed, not a bug), so any app
+                  # doing its own connectivity check needs this value to test
+                  # against a call its own credentials actually cover, rather
+                  # than hardcode this platform's <app>-<alias> naming
+                  # convention. Same "expose the derived value" reasoning as
+                  # S3_BUCKET_X.
                   env: >-
                     ${schema.spec.databases.map(d, {
                       "name": "DATABASE_URL_" + d.as.upperAscii().replace("-", "_"),
@@ -353,6 +375,10 @@ spec:
                             "key": "secretKey"
                           }
                         }
+                      },
+                      {
+                        "name": "S3_PREFIX_" + o.as.upperAscii().replace("-", "_"),
+                        "value": schema.metadata.name + "-" + o.as
                       }
                     ]).flatten()}
                   readinessProbe:
