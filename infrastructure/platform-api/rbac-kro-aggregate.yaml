@@ -47,6 +47,19 @@ rules:
     resources: ["podmonitors"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
+  # Rendered by the ObjectStorage RGD (Bucket) and the Application RGD's
+  # per-attachment IAM set (S3Identity/S3Credentials/S3Policy/
+  # S3PolicyBinding). kro also needs watch on the Seaweed kind itself: the
+  # Database-side externalRef pattern doesn't apply here, but Bucket/S3*
+  # objects reference the Seaweed cluster by name and kro resolves that
+  # relationship through the same informer machinery.
+  - apiGroups: ["seaweed.seaweedfs.com"]
+    resources: ["buckets", "s3identities", "s3credentials", "s3policies", "s3policybindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["seaweed.seaweedfs.com"]
+    resources: ["seaweeds"]
+    verbs: ["get", "list", "watch"]
+
   # Read-only. The Application RGD does not create Secrets — CloudNativePG
   # mints <cluster>-app itself — but kro resolves references against them.
   # Deliberately not writable: nothing in this platform's design has kro

@@ -26,3 +26,22 @@ configMapGenerator:
     options:
       labels:
         grafana_dashboard: "1"
+  # seaweedfs.json is grafana.com ID 19173 ("SeaweedFS", chrislusf — the same
+  # maintainer as the default server image). Rougher than the other two
+  # dashboards here, and flagged as such rather than presented as equally
+  # solid: schemaVersion 14 (2019, pre-flat-panel/rows-based layout), no
+  # templating.list datasource variable (every panel instead carries the
+  # literal import-wizard placeholder "${DS_PROMETHEUS-DEV}", replaced here
+  # with null so panels fall back to this Grafana's one configured
+  # datasource — without that edit every panel shows "datasource not
+  # found"). Metric names (SeaweedFS_filer_request_total, etc.) match this
+  # repo's pinned server version's exposed metric families, but the
+  # dashboard predates six years of seaweedfs releases and has not been
+  # visually verified end-to-end — do that once real traffic is flowing
+  # (Verification, below), not assumed from the metric names matching.
+  - name: grafana-dashboard-seaweedfs
+    files:
+      - seaweedfs.json
+    options:
+      labels:
+        grafana_dashboard: "1"

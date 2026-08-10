@@ -1,0 +1,11 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: seaweedfs-operator
+  namespace: flux-system
+spec:
+  interval: 1h
+  # Re-verified against https://seaweedfs.github.io/seaweedfs-operator/
+  # as of 2026-08-10 — the canonical index. An older release also published
+  # under .../seaweedfs-operator/helm; that path is not current.
+  url: https://seaweedfs.github.io/seaweedfs-operator/
