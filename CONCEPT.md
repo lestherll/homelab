@@ -2,7 +2,7 @@
 
 **Status:** Draft — v0.2 open questions resolved
 **Author:** —
-**Last updated:** 2026-08-03 (v0.4)
+**Last updated:** 2026-08-10 (v0.5)
 
 ---
 
@@ -130,6 +130,8 @@ The mechanism by which everything else is requested.
 
 **Resolved (D1):** three layers — raw manifests, composed templates, typed API — with a promotion rule governing when a resource type earns the top layer, and a requirement that the top layer render its own output.
 
+**Amended (D15):** `Database`, `ObjectStorage`, and `Application` were promoted to layer 2 at one hand-built instance each, ahead of D1's three-instance rule — a deliberate, reasoned pivot, not an abandonment of the rule itself.
+
 ### C2 — Coding environments
 
 Remote development. No desktop.
@@ -226,6 +228,8 @@ Running the things I build.
 - Provide me direct query access from a coding environment without exposing the database more widely
 
 **Test of success:** provisioning a database and connecting an app to it should involve zero manual credential handling.
+
+**Resolved (D15):** object storage delivered on the same self-service pattern as Postgres, ahead of schedule — a typed `ObjectStorage` API (kro, backed by SeaweedFS) with per-consumer isolated credentials, proven with a real app. Message broker and cache remain unbuilt (see `docs/message-broker-design-notes.md` for exploratory notes on the former).
 
 ### C7 — Observability
 
@@ -547,6 +551,30 @@ This answers the "considerably more machinery" objection in the original questio
 
 **Reverses if:** reconciliation latency turns out to be a non-issue in practice — e.g. webhook-triggered reconciliation proves fast enough that the declarative lane meets GP1's "within a minute" unmodified — in which case C2 folds back into the declarative lane and this decision is unnecessary complexity.
 
+### D15 — Layer-2 promotion pivot: `Database`, `ObjectStorage`, `Application` via kro, ahead of D1's instance count
+
+**Decision.** Promote `Database`, `ObjectStorage`, and `Application` to layer 2 (D1) via kro `ResourceGraphDefinition`s at one hand-built instance each, instead of waiting for the third instance D1's rule otherwise requires. Group `platform.homelab/v1alpha1`: `Database` renders a CNPG `Cluster`+`PodMonitor` (single-consumer by convention, not schema-enforced); `ObjectStorage` renders a SeaweedFS `Bucket` and is the shared type — one instance per bucket, every attaching `Application` gets its own isolated `S3Identity`/`S3Credentials`/prefix-scoped `S3Policy`/`S3PolicyBinding`; `Application` renders `Deployment`+`Service`+`Ingress` and attaches to lists of both, with per-attachment env vars and explicit unresolved-ref status so a typo'd reference fails loudly instead of reading `ready: true`.
+
+**Reasoning.** D1's promotion rule guards against designing an abstraction before enough instances reveal its real shape — the leakiness it prevents comes from hand-committing bespoke YAML per instance and migrating everyone off a guessed abstraction later. A kro RGD doesn't fail that way: it's declarative and cheap to revise in place, and an additive schema change re-reconciles every existing instance without touching them (confirmed live — adding `objectStorage`/`securityContext`/`persistence` to `Application`'s schema left the already-running `fastapi-echo` instance untouched). That moves the risk from "wrong abstraction, expensive to fix" to "kro's own API is v1alpha1" — real, but smaller — and it buys C1's self-service pattern now instead of spending a third hand-built instance mostly re-proving mechanics the first two already established.
+
+**Proof status.** `fastapi-echo` (Database) and `personal-finance-dashboard` (Application + ObjectStorage) are both live and serving. The sharing proof (second `Application` attaching to the same `ObjectStorage`), the reclaim check, and a deliberate breaking-schema-change negative test were named in the design but not yet run as documented proofs — tracked in Linear, not silently dropped.
+
+**Reverses if:** kro's v1alpha1 API breaks compatibility in a way that costs more than a third hand-built instance would have, or a promoted RGD turns out to need a rewrite rather than a revision once a real second consumer arrives.
+
+Full design and build record, including every gotcha hit: `docs/self-service-platform-design-notes.md`.
+
+### D16 — Zero-touch app registration: CI self-registers directly to the cluster
+
+**Decision.** Not yet built — design only. Each app repo's own CI joins the tailnet (`tailscale/github-action`) and `kubectl apply`s its own `GitRepository`+`Kustomization` pair directly into the cluster, authenticated with a scoped bound ServiceAccount token, instead of a per-app commit to this repo.
+
+**Reasoning.** D15 still leaves one manual step per app: a small Flux pointer committed to *this* repo, even though the app's own manifests live entirely in the app's own repo. The requirement is literal zero changes to this repo per app, ever — it's infrastructure, not a per-app registry. ArgoCD's `ApplicationSet` SCM generator does org/topic-wide auto-discovery natively but means running a second CD tool, a disproportionate swap; the Flux-native `gitopssets-controller` ships no equivalent GitHub-discovery generator out of the box. Reusing Tailscale, RBAC, and `kubectl apply` — all already standard in this repo — needs no new controller.
+
+**Named tradeoffs.** Breaks full git-reconstructibility for this one object class (a from-scratch cluster rebuild won't recreate app pointer objects; each app's CI needs re-triggering). One shared registrar token means no cross-app RBAC isolation — accepted at this repo's single-operator, no-multi-tenancy scope. No automated cleanup on app deletion; orphaned registrations need a manual delete, documented as policy.
+
+**Reverses if:** a second real trust boundary arrives, making shared-token cross-app isolation unacceptable; or GitHub OIDC federation removes the need for a stored token, changing what "zero-touch" should mean.
+
+Full design: `docs/self-service-platform-design-notes.md` §8.
+
 ### 11.14 Remaining open questions
 
 Deliberately unresolved, and recorded so they stay that way consciously.
@@ -593,3 +621,7 @@ Deliberately unresolved, and recorded so they stay that way consciously.
   - **§8** — external git host named as an accepted single point of failure; observability budget recorded as a constraint.
   - **§9** — S11 (state labelling) and S12 (verified offline degradation) added.
   - Design questions in C1, C3, and C8 replaced with pointers to the decisions that answer them.
+- **v0.5 (2026-08-10)** — D15 recorded: `Database`, `ObjectStorage`, and `Application` promoted to layer 2 via kro ahead of D1's three-hand-built-instance rule, with the reasoning for why that's a deliberate pivot rather than abandoning D1. D16 recorded: zero-touch app registration (CI self-registers directly to the cluster), design only, not yet built. Consequent changes:
+  - **C1** — D1's promotion rule now carries a recorded amendment for these three types (D15).
+  - **C6** — object storage resolved and delivered self-service, alongside Postgres (D15).
+  - `AGENT.md` repo layout updated for `kro/`, `platform-api/`, `postgres/`, `seaweedfs/`, `seaweedfs-runtime/`, and per-app pointer directories. `PR.md` removed from the repo — its findings were fixed during the Phase 0 review cycle it tracked, and it wasn't being kept current as a running log for anything after.

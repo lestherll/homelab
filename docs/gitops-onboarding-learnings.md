@@ -151,28 +151,61 @@ re-test app-onboarding mechanics already proven twice.
   instances wanted before considering a Layer 1 template or typed
   `Database` API, per D1.
 
-## Next steps
+## Superseded 2026-08-10: the D1 promotion rule was pivoted away from, not completed
 
-- **Object storage as the platform's first C6 data service.** Surfaced by
-  instance #2's upload/backup gap, not built speculatively: CONCEPT.md's
-  C6 already names object storage as a "should" alongside Postgres on the
-  same self-service pattern, and this is the first real pull for it.
-  Scoped deliberately small for its own first instance, same D1 logic as
-  the app-onboarding pattern — a single MinIO-or-equivalent `HelmRelease`
-  plus one manually-provisioned bucket/credential for
-  `personal-finance-dashboard`, not a templated self-service API yet (that
-  still needs 2 more hand-built data-service instances before it earns
-  one). Also **doesn't get this platform out of the node-local-disk
-  problem for free** — a single-node object store is still one disk on
-  this one machine; genuine off-host resilience needs the store's own
-  bucket replication/backup, which is a distinct follow-up, not implied by
-  "add object storage."
-- **`personal-finance-dashboard`'s app code isn't S3-native.** It reads/
-  writes local parquet + a DuckDB file via `DATA_DIR`. Moving it onto
-  object storage later means either app-side changes (adapters that speak
-  S3) or a fuse-style mount (rclone/s3fs) — the latter is a known
-  reliability risk for a database file under concurrent access, so this
-  needs a real decision when the time comes, not a default.
-- **One more `Application`-track instance, two more `Database`-track
-  instances** still wanted before either earns a Layer 1 template or
-  typed API (per D1) — this doc should keep growing with each one.
+Everything above this line is the evidence base as it stood before the
+pivot — kept intact rather than rewritten, because it's exactly the
+evidence the pivot decision rests on. What actually happened next was
+**not** "hand-build one more `Application` instance and two more `Database`
+instances until D1's counters hit 3/3." Instead: `Database` was promoted to
+a Layer-2 typed API (`platform.homelab/v1alpha1`, via kro) at 1/3, and
+`Application`/`ObjectStorage` followed the same jump rather than waiting for
+a third hand-built instance apiece. Recorded as **D15** (`CONCEPT.md` entry
+pending — see `docs/self-service-platform-design-notes.md` for the full
+argument).
+
+**The substantive reason, not just impatience:** D1's leakiness risk comes
+specifically from hand-committing bespoke YAML per instance and then
+migrating everyone off a guessed abstraction later. A kro
+`ResourceGraphDefinition` is declarative and cheap to revise in place — kro
+re-reconciles every existing instance against a schema revision, and
+additive field changes are safe without touching existing instances
+(confirmed live: adding `objectStorage`/`securityContext`/`persistence` to
+the `Application` schema left `fastapi-echo`'s already-running instance
+untouched). That shifts the risk from "wrong abstraction, expensive to fix"
+to "kro's own API is v1alpha1" — real, but smaller, and buys the
+self-service pattern now instead of waiting on a third instance that would
+mostly re-prove mechanics instance #1/#2 already established.
+
+**A pattern from instance #2 that transferred unchanged, not by luck:**
+`personal-finance-dashboard`'s two open items from this doc —
+"object storage next" and "app code isn't S3-native" — are exactly what
+D15/D16 built and exactly what's still deferred. The self-service
+`ObjectStorage`+`Application.objectStorage[]` attachment is live and proven
+(isolated identity, prefix-scoped credentials, a real write/read/delete
+probe at app startup). The app-code S3 migration (adapters that actually
+read/write finance data via S3 instead of local parquet/DuckDB) is **still
+not done**, by explicit user choice — the platform plumbing was proven on
+its own merits first, matching this doc's own original "needs a real
+decision when the time comes, not a default" framing.
+
+**MinIO was reconsidered and dropped.** This doc's "Next steps" entry named
+"a single MinIO-or-equivalent HelmRelease." By the time D15 was built,
+MinIO Operator had been archived upstream (2026-03-20) — SeaweedFS
+(`seaweedfs-operator`) was chosen instead, actively maintained, with a full
+S3+IAM CRD set (`Bucket`/`S3Identity`/`S3Credentials`/`S3Policy`/
+`S3PolicyBinding`) that made the self-service attachment pattern possible
+without hand-rolling credential minting.
+
+**Not resolved, restated as still open:** the node-local-disk caveat this
+doc already named ("a single-node object store is still one disk on this
+one machine") is unchanged — SeaweedFS doesn't get around it either; real
+off-host resilience is still a distinct, unstarted follow-up.
+
+For the full D15 build record — what shipped, what's proven vs. only
+informally exercised, and the sharp technical gotchas (kro CEL quirks,
+Flux's live-testing hazard, SeaweedFS capacity tuning, Streamlit's
+execution model) — see `docs/self-service-platform-design-notes.md`'s
+Implementation log, and the `~/.claude/projects/.../memory/
+project_d15_self_service_platform.md` session memory for the condensed
+version.

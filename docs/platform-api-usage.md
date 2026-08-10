@@ -1,0 +1,283 @@
+# Platform API: what's live, and how to use it
+
+Practical reference for `platform.homelab/v1alpha1` — the typed self-service
+API (D15). For the *why* behind any of this, see
+`docs/self-service-platform-design-notes.md`. This doc is the *how*: what
+fields exist today, what an app repo's `deploy/` looks like, and how to
+verify a migration actually worked.
+
+Current status: `Database`, `ObjectStorage`, and `Application` are live and
+Flux-managed. `fastapi-echo` runs on all three today and is the reference
+example throughout.
+
+## Prerequisites
+
+- Every namespace still needs its own `namespace.yaml`, same as before.
+- If the app will use `ObjectStorage`, label the namespace:
+  ```yaml
+  metadata:
+    labels:
+      platform.homelab/seaweedfs-access: "true"
+  ```
+  This is a real authorization grant (a `ResourceReferenceGrant` trusts
+  exactly this label), not decoration — omit it and any `Bucket`/`S3*`
+  object in that namespace fails to resolve its cluster reference.
+
+## `Database`
+
+```yaml
+apiVersion: platform.homelab/v1alpha1
+kind: Database
+metadata:
+  name: myapp-db
+  namespace: myapp
+spec:
+  size: small   # or "medium" — enum, anything else is rejected at apply time
+```
+
+Renders one CloudNativePG `Cluster` (single instance, `local-path-retain`
+storage) plus a `PodMonitor` so it's scraped by Prometheus automatically.
+
+**Convention, not enforced by the schema: one `Database` per consumer.**
+CloudNativePG can only hand out one bootstrap credential per cluster, so a
+second `Application` attaching to the same `Database` would get identical
+credentials to the first. Don't do that — declare a second `Database`
+instead. (Object storage below is the opposite — sharing is the point
+there.)
+
+**Credentials**: CloudNativePG auto-mints a Secret named `<database-name>-app`
+with a `uri` key. `Application` wires this in for you (see below) — you
+never reference this Secret directly.
+
+## `ObjectStorage`
+
+```yaml
+apiVersion: platform.homelab/v1alpha1
+kind: ObjectStorage
+metadata:
+  name: myapp-bucket
+  namespace: myapp
+spec: {}   # no fields yet
+```
+
+Renders one SeaweedFS `Bucket`, with the real S3 bucket name derived as
+`<namespace>-<name>` (globally unique across the cluster; `metadata.name`
+only needs to be unique within the namespace).
+
+**Sharing is the point, unlike `Database`.** Exactly one `ObjectStorage`
+instance exists per bucket — created once by whichever app needs it first. A
+second app that wants the *same* bucket does **not** declare a second
+`ObjectStorage`; it just adds an entry to its own `Application`'s
+`objectStorage` list, referencing this one by name (see below). Declaring a
+second `ObjectStorage` instance for the same bucket fails
+(`BucketAlreadyExists`).
+
+Every consumer — including the first — gets its own isolated `S3Identity` +
+minted credentials + a policy scoped to `<app-name>-<alias>/*` inside the
+bucket. There's no "first consumer gets full access" case.
+
+## `Application`
+
+```yaml
+apiVersion: platform.homelab/v1alpha1
+kind: Application
+metadata:
+  name: myapp
+  namespace: myapp
+spec:
+  image: ghcr.io/you/myapp:latest
+  port: 8000                      # default 8000
+  host: myapp                     # Tailscale hostname, no tailnet suffix
+  probePath: /healthz             # default /healthz
+  size: small                     # small|medium, default small
+
+  databases:
+    - ref: myapp-db                 # metadata.name of a Database in this namespace
+      as: main                      # alias — becomes DATABASE_URL_MAIN
+      # externalSecretName/externalSecretKey: escape hatch for a database
+      # this platform doesn't own — see below, rarely needed
+
+  objectStorage:
+    - ref: myapp-bucket              # metadata.name of an ObjectStorage in this namespace
+      as: data                       # alias — becomes S3_*_DATA
+
+  # Both optional — omit entirely for a plain stateless app (fastapi-echo
+  # sets neither).
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+  persistence:
+    hostPath: /home/you/projects/myapp/data   # host directory to bind-mount
+    mountPath: /app/data                      # default /app/data
+```
+
+Renders `Deployment` + `Service` + `Ingress` (`ingressClassName: tailscale`,
+same shape every ingress in this cluster already uses).
+
+### Attachment lists are always lists
+
+Even a single database or bucket is written as a one-item list. Aliases are
+mandatory and always suffix the environment variable — there is no bare
+`DATABASE_URL` or `AWS_ACCESS_KEY_ID` for the single-attachment case. This is
+deliberate: it means adding a second attachment later never breaks the
+first.
+
+### Environment variables produced
+
+| Attachment | Variable | Source |
+|---|---|---|
+| `databases[].as: X` | `DATABASE_URL_X` | `<ref>-app` Secret, key `uri` |
+| `objectStorage[].as: X` | `S3_ENDPOINT_X` | derived, `http://seaweed-s3.seaweedfs.svc:8333` |
+| | `S3_BUCKET_X` | the referenced `ObjectStorage`'s resolved bucket name |
+| | `AWS_ACCESS_KEY_ID_X` | minted `S3Credentials` Secret |
+| | `AWS_SECRET_ACCESS_KEY_X` | minted `S3Credentials` Secret |
+
+`X` is the alias, upper-cased with hyphens turned to underscores
+(`read-replica` → `READ_REPLICA`).
+
+### The `external` database escape hatch
+
+For a database this platform doesn't own/provision:
+
+```yaml
+databases:
+  - ref: unused-but-required   # ignored when externalSecretName is set
+    as: legacy
+    externalSecretName: my-hand-created-secret
+    externalSecretKey: uri     # default "uri"
+```
+
+No `Database` instance needed or looked up; `DATABASE_URL_LEGACY` is wired
+straight from the named Secret. Rarely needed — most apps should provision a
+real `Database`.
+
+## Status and how to read it
+
+```
+kubectl get databases,objectstorages,applications -n <namespace>
+```
+
+`Application`'s columns:
+
+| Column | Means |
+|---|---|
+| `READY` | kro's own condition — the graph rendered successfully. **Does not mean attachments resolved.** |
+| `RESOLVED` | `true` only if every `databases`/`objectStorage` ref actually matched something (or used the external escape hatch) |
+| `UNRESOLVED` | list of ref names that didn't resolve — empty when healthy |
+| `URL` | live Tailscale FQDN, once the Ingress has one |
+
+**Always check `RESOLVED`/`UNRESOLVED`, not just `READY`.** A typo'd ref
+still renders the Deployment (with a `secretKeyRef` pointing at a Secret
+that doesn't exist), which shows `READY: True` and fails at the pod with
+`CreateContainerConfigError` — `UNRESOLVED` is what actually tells you why.
+
+## Onboarding a brand-new app
+
+1. `deploy/namespace.yaml` (as before). Add the `seaweedfs-access` label if
+   using object storage.
+2. `deploy/database.yaml` — only if this app needs a *new* database. Skip if
+   attaching to one that already exists.
+3. `deploy/objectstorage.yaml` — only if this app needs a *new* bucket. Skip
+   if attaching to an existing one (see sharing, above).
+4. `deploy/application.yaml` referencing whichever of the above apply, by
+   name, plus your image/port/host/probe.
+5. `deploy/kustomization.yaml` listing all of the above (`namespace.yaml`
+   first).
+6. Push. Flux picks it up on its next reconcile (5m for app repos), or force
+   it: `flux reconcile kustomization <app-name> --with-source`.
+
+## Migrating an *existing* hand-written app — read this before deleting anything
+
+Deleting a hand-written `Cluster`/`Bucket` manifest and adding the typed
+instance **in the same PR is a real data-loss risk.** Flux prunes objects
+whose manifest disappears; the typed instance creates a *new* one under the
+same name, and the old data is gone. This is not hypothetical — it happened
+during `fastapi-echo`'s own migration.
+
+An in-cluster annotation added by hand does **not** survive — Flux
+re-evaluates prune eligibility from the manifest it applies, not from the
+live object, so a `kubectl annotate` before merging doesn't help.
+
+**Correct sequence, two PRs:**
+
+1. **PR A** — add `kustomize.toolkit.fluxcd.io/prune: disabled` directly
+   into the *existing* manifest (the old `Cluster`/`Bucket`/etc. YAML file
+   itself). Merge, let Flux apply it for real, confirm the annotation is
+   live on the object (`kubectl get cluster <name> -n <ns> -o
+   jsonpath='{.metadata.annotations}'`).
+2. **PR B** — remove the old manifest, add the `Database`/`ObjectStorage`
+   instance under the same `metadata.name`. Flux prunes nothing (annotation
+   already in effect), and the typed instance's controller *adopts* the
+   existing object in place — confirmed empirically to preserve data and
+   keep the same PVC (no reprovisioning).
+
+**Also expect a downtime window from the D2 gap.** There's no image-
+automation reconciler yet, so if the app's `Deployment` gets recreated (as
+part of adopting the typed `Application`), it may briefly run the *old*
+image against a *new* environment variable name — as happened with
+`fastapi-echo`'s `DATABASE_URL` → `DATABASE_URL_MAIN` rename. Force a fresh
+pull once CI has published:
+```
+kubectl rollout restart deploy/<app-name> -n <namespace>
+```
+
+**If the app renders an `Ingress`, expect a brief HTTPS blip on recreation**
+even though nothing else changed — the Tailscale proxy rebuilds and
+re-issues its TLS cert. Self-heals in well under a minute; don't force-retry
+a `tailscale cert` re-issuance by hand, it can make it worse.
+
+## Verification checklist
+
+```
+export KUBECONFIG=$HOME/.kube/config
+
+# Instances healthy
+kubectl get databases,objectstorages,applications -n <namespace>
+
+# Postgres reachable
+kubectl cnpg psql <database-name> -n <namespace>
+
+# Being scraped
+kubectl get podmonitor -n <namespace>
+
+# Rendered env vars look right
+kubectl get deploy <app-name> -n <namespace> -o jsonpath='{.spec.template.spec.containers[0].env}' | python3 -m json.tool
+
+# App serving
+curl -s -o /dev/null -w "%{http_code}\n" https://<host>.tailf4742d.ts.net/<probePath>
+```
+
+If using object storage, prove isolation rather than just presence — a
+policy *existing* is not the same as it actually restricting anything:
+
+```
+AK=$(kubectl get secret <app>-<alias>-s3 -n <ns> -o jsonpath='{.data.accessKey}' | base64 -d)
+SK=$(kubectl get secret <app>-<alias>-s3 -n <ns> -o jsonpath='{.data.secretKey}' | base64 -d)
+```
+
+Then from a debug pod (or locally against the tailnet, if reachable) with
+`AWS_ACCESS_KEY_ID=$AK AWS_SECRET_ACCESS_KEY=$SK`, endpoint
+`http://seaweed-s3.seaweedfs.svc:8333`:
+
+- write/read inside `s3://<bucket>/<app>-<alias>/...` → succeeds
+- write outside that prefix, or at the bucket root → `AccessDenied`
+
+Both cases matter — only checking the success case would miss a
+fail-everywhere policy that happens to pass an existence check by accident.
+
+## Known limits, worth knowing before you start
+
+- **No image automation (D2 gap).** `:latest` + manual `kubectl rollout
+  restart` is the current story. Tracked as LES-57.
+- **Schema evolution is additive-only in practice.** Adding an optional
+  field to `Database`/`Application`/`ObjectStorage` is safe and doesn't
+  touch existing instances. Renaming, retyping, or removing a field breaks
+  every existing instance of that kind — kro refuses to apply the CRD change
+  at all until the offending instances are gone.
+- **Printer columns (`RESOLVED`, `URL`, etc.) can't be added or changed
+  after a kind is first created**, even by deleting and recreating the RGD —
+  the generated CRD survives RGD deletion and gets adopted, columns and all.
+  Not something an app author needs to touch, just don't expect a `kubectl
+  get` column to change without a real CRD rebuild (which means deleting
+  every instance of that kind first).
