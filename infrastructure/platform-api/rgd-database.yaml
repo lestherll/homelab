@@ -1,0 +1,128 @@
+# Database — a resource API. It provisions Postgres and knows nothing about
+# who consumes it; Application attaches to it by name (see rgd-application.yaml).
+#
+# SINGLE-CONSUMER BY CONVENTION. A Database instance is 1:1 with its consumer.
+# This is not a shortcut, it follows from CloudNativePG's actual behaviour:
+# DatabaseRole.spec.passwordSecret requires a Secret that already exists, the
+# operator will not generate one, and kro's CEL is deterministic by design so it
+# cannot mint a random password either. A second Application attaching to the
+# same Database would therefore receive *byte-identical* credentials to the
+# first, collapsing the blast-radius isolation the attachment model exists to
+# provide. Sharing an engine is a deliberate Layer-0 escape hatch, never a
+# schema feature. This is a solo-operator repo, so review discipline enforces
+# it, not a webhook.
+#
+# Revisit trigger: when a second app genuinely needs to share an engine, build
+# it on DatabaseRole's clientCertificate option — the operator *does*
+# auto-generate and rotate <name>-client-cert, which is genuinely zero-touch
+# unlike a shared password. Costs pg_hba cert-auth config and app-driver TLS
+# support; real work, deliberately deferred.
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: database
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: Database
+    # Must be set explicitly — kro defaults the group to kro.run. This
+    # group/version is a one-way door: every app repo hardcodes it into every
+    # instance manifest, and kro cannot change a generated CRD's group after
+    # creation without a coordinated migration across every repo.
+    group: platform.homelab
+    spec:
+      size: string | enum="small,medium" default="small" description="t-shirt size; drives CPU/memory/storage"
+    status:
+      # Derived, not read from status: CloudNativePG names the bootstrap
+      # credential <cluster>-app deterministically. Publishing it means the
+      # Application RGD never has to reproduce the naming convention.
+      secretName: ${schema.metadata.name + "-app"}
+      readyInstances: ${cluster.status.readyInstances}
+      phase: ${cluster.status.phase}
+    # PRINTER COLUMNS ARE CREATE-TIME ONLY. kro applies these when it first
+    # creates the CRD; on an adopted CRD (and the CRD survives RGD deletion,
+    # because the chart sets config.allowCRDDeletion=false) changes here are
+    # silently ignored. Correcting them later means deleting the CRD, which
+    # deletes every Database instance — and with it every Postgres cluster.
+    # Verified empirically during the LES-56 spike. Get these right the first
+    # time; treat them like the group/version above.
+    #
+    # Setting this field also suppresses kro's own default columns, so State
+    # and Age are re-declared here deliberately.
+    additionalPrinterColumns:
+      - name: State
+        type: string
+        jsonPath: .status.state
+      - name: Ready
+        type: string
+        jsonPath: .status.conditions[?(@.type=="Ready")].status
+      - name: Size
+        type: string
+        jsonPath: .spec.size
+      - name: Secret
+        type: string
+        jsonPath: .status.secretName
+      - name: Phase
+        type: string
+        jsonPath: .status.phase
+      - name: Age
+        type: date
+        jsonPath: .metadata.creationTimestamp
+  resources:
+    - id: cluster
+      # Makes kro's own Ready condition mean "Postgres is actually serving",
+      # rather than merely "the Cluster object was created".
+      readyWhen:
+        - ${cluster.status.readyInstances > 0}
+      template:
+        apiVersion: postgresql.cnpg.io/v1
+        kind: Cluster
+        metadata:
+          name: ${schema.metadata.name}
+          namespace: ${schema.metadata.namespace}
+        spec:
+          # No HA. Single-node cluster, consistent with D3.
+          instances: 1
+          # Propagated to generated Pods/PVCs/Services. D4 classifies Postgres
+          # data as Durable, and the unlabelled-volume alerting D4 calls for
+          # must look at PVCs — PVs do not inherit PVC labels.
+          inheritedMetadata:
+            labels:
+              platform.homelab/durability: durable
+          storage:
+            size: '${schema.spec.size == "small" ? "1Gi" : "5Gi"}'
+            # Retain, so a deleted Database leaves its data recoverable.
+            storageClass: local-path-retain
+          resources:
+            requests:
+              cpu: '${schema.spec.size == "small" ? "100m" : "250m"}'
+              memory: '${schema.spec.size == "small" ? "256Mi" : "512Mi"}'
+            limits:
+              cpu: '${schema.spec.size == "small" ? "500m" : "1000m"}'
+              memory: '${schema.spec.size == "small" ? "512Mi" : "1Gi"}'
+    - id: podMonitor
+      template:
+        apiVersion: monitoring.coreos.com/v1
+        kind: PodMonitor
+        metadata:
+          name: ${schema.metadata.name}
+          namespace: ${schema.metadata.namespace}
+          labels:
+            # REQUIRED, not decoration. This cluster's Prometheus selects
+            # monitors with podMonitorSelector.matchLabels
+            # {release: kube-prometheus-stack}. Without this label the
+            # PodMonitor is created successfully and then silently never
+            # scraped.
+            release: kube-prometheus-stack
+        spec:
+          # cluster.spec.monitoring.enablePodMonitor is deprecated upstream in
+          # favour of a hand-managed PodMonitor, which is why this is a
+          # separate resource rather than a flag on the Cluster above. Every
+          # CNPG instance already runs the exporter on the port named
+          # "metrics" (9187) — confirmed against a live pod.
+          selector:
+            matchLabels:
+              cnpg.io/cluster: ${schema.metadata.name}
+              cnpg.io/podRole: instance
+          podMetricsEndpoints:
+            - port: metrics

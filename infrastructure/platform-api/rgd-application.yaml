@@ -1,0 +1,209 @@
+# Application — the consumer side of the platform API.
+#
+# Database (and later ObjectStorage) are *resource* APIs: they provision
+# infrastructure and know nothing about consumers. Application's `databases`
+# list is an *attachment* API: "consume that resource, with credentials wired
+# in for me." Keeping the two separate is what lets future types
+# (CodingEnvironment, batch workloads) adopt the same attachment shape without
+# touching either resource API.
+#
+# Attachments are lists with aliases from day one, even though every app today
+# has exactly one database. A single-attachment app writes a one-item list.
+# The group/version below is a one-way door, so the shape that avoids a
+# cliff-edge migration on the day an app grows a second attachment has to be
+# chosen now, not later.
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: application
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: Application
+    group: platform.homelab
+    types:
+      DatabaseAttachment:
+        ref: string | required=true description="metadata.name of a Database in this namespace"
+        # Constrained so every accepted alias yields a legal environment
+        # variable name after upper-casing. Fails at kubectl apply / git push
+        # time rather than deep in a reconcile loop.
+        as: string | required=true pattern="^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" description="alias; becomes DATABASE_URL_<ALIAS>"
+        # Escape hatch for a database this platform does not own. When set, no
+        # Database is provisioned or looked up — the same env var is wired from
+        # a pre-existing Secret instead.
+        externalSecretName: string | description="wire from this existing Secret instead of a managed Database"
+        externalSecretKey: string | default="uri" description="key within externalSecretName"
+    spec:
+      image: string | required=true
+      port: integer | default=8000
+      host: string | required=true description="Tailscale hostname, without the tailnet suffix"
+      probePath: string | default="/healthz"
+      size: string | enum="small,medium" default="small"
+      databases: "[]DatabaseAttachment"
+    status:
+      url: ${ingress.status.loadBalancer.ingress[0].hostname}
+      availableReplicas: ${deployment.status.availableReplicas}
+      # NOT named `ready`. kro publishes its own Ready *condition*, which is
+      # True whenever the graph rendered successfully and says nothing about
+      # whether attachment refs resolved — an instance with a typo'd ref still
+      # reports Ready=True. A custom field named `ready` sits next to that
+      # condition reading as authoritative while being shadowed in every
+      # default table view. Verified during the LES-56 spike; named distinctly
+      # so the two can't be confused.
+      attachmentsResolved: ${schema.spec.databases.all(d, has(d.externalSecretName) || size(databasesInNs.filter(x, x.metadata.name == d.ref)) > 0)}
+      # Deliberately NOT unresolvedDatabaseRefs. Printer columns cannot be
+      # revised after the CRD is created (see the block below), so this is a
+      # single combined list from the start — when objectStorage attachments
+      # are added, they extend this expression rather than needing a new
+      # column that could never be added.
+      unresolvedRefs: ${schema.spec.databases.filter(d, !has(d.externalSecretName) && size(databasesInNs.filter(x, x.metadata.name == d.ref)) == 0).map(d, d.ref)}
+    # CREATE-TIME ONLY — see the equivalent note in rgd-database.yaml. These
+    # cannot be corrected without deleting the CRD and every Application with
+    # it. The Resolved and Unresolved columns exist because kro's own Ready
+    # column cannot answer "did the refs resolve", which is the failure mode
+    # this API is most likely to hit in practice.
+    additionalPrinterColumns:
+      - name: State
+        type: string
+        jsonPath: .status.state
+      - name: Ready
+        type: string
+        jsonPath: .status.conditions[?(@.type=="Ready")].status
+      - name: Resolved
+        type: boolean
+        jsonPath: .status.attachmentsResolved
+      - name: Unresolved
+        type: string
+        jsonPath: .status.unresolvedRefs
+      - name: URL
+        type: string
+        jsonPath: .status.url
+      - name: Age
+        type: date
+        jsonPath: .metadata.creationTimestamp
+  resources:
+    # Attachment resolution, part 1 of 2: a collection externalRef fetching
+    # every Database in this instance's namespace.
+    #
+    # kro forbids forEach and externalRef on the same resource entry, so the
+    # lookup and the loop have to be separate entries — this one does the
+    # lookup, the Deployment's CEL does the matching.
+    #
+    # `namespace` is NOT optional here. kro lists across ALL namespaces when it
+    # is omitted on a collection ref, which would let one app's Application
+    # resolve another app's Database and wire in its credentials.
+    - id: databasesInNs
+      externalRef:
+        apiVersion: platform.homelab/v1alpha1
+        kind: Database
+        metadata:
+          namespace: ${schema.metadata.namespace}
+          selector: {}
+
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.metadata.name}
+          namespace: ${schema.metadata.namespace}
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: ${schema.metadata.name}
+          template:
+            metadata:
+              labels:
+                app: ${schema.metadata.name}
+            spec:
+              containers:
+                - name: ${schema.metadata.name}
+                  image: ${schema.spec.image}
+                  # No image-automation reconciler exists yet (unbuilt C3/D2),
+                  # so tags are typically :latest and must re-pull on rollout.
+                  imagePullPolicy: Always
+                  ports:
+                    - containerPort: ${schema.spec.port}
+                  # Attachment resolution, part 2 of 2. One CEL map over the
+                  # attachment list — no forEach needed, because this produces
+                  # entries within a single object rather than stamping out
+                  # multiple Kubernetes objects.
+                  #
+                  # Explicit `env` with a single-key secretKeyRef, never
+                  # envFrom: CloudNativePG's <cluster>-app Secret carries
+                  # host/user/password/dbname alongside uri, and envFrom would
+                  # dump all of them into the container as bare variables.
+                  #
+                  # Always alias-suffixed, with no bare-name special case for a
+                  # one-item list. A bare DATABASE_URL would have to disappear
+                  # the day a second attachment is added — a migration cliff
+                  # disguised as a convenience.
+                  env: >-
+                    ${schema.spec.databases.map(d, {
+                      "name": "DATABASE_URL_" + d.as.upperAscii().replace("-", "_"),
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "name": has(d.externalSecretName) ? d.externalSecretName : d.ref + "-app",
+                          "key": has(d.externalSecretName) ? d.externalSecretKey : "uri"
+                        }
+                      }
+                    })}
+                  readinessProbe:
+                    httpGet:
+                      path: ${schema.spec.probePath}
+                      port: ${schema.spec.port}
+                    initialDelaySeconds: 2
+                    periodSeconds: 10
+                  livenessProbe:
+                    httpGet:
+                      path: ${schema.spec.probePath}
+                      port: ${schema.spec.port}
+                    initialDelaySeconds: 5
+                    periodSeconds: 20
+                  resources:
+                    requests:
+                      cpu: '${schema.spec.size == "small" ? "50m" : "100m"}'
+                      memory: '${schema.spec.size == "small" ? "64Mi" : "256Mi"}'
+                    limits:
+                      cpu: '${schema.spec.size == "small" ? "200m" : "1000m"}'
+                      memory: '${schema.spec.size == "small" ? "128Mi" : "1Gi"}'
+    - id: service
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${schema.metadata.name}
+          namespace: ${schema.metadata.namespace}
+        spec:
+          selector:
+            app: ${schema.metadata.name}
+          ports:
+            - port: 80
+              targetPort: ${schema.spec.port}
+
+    - id: ingress
+      template:
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: ${schema.metadata.name}
+          namespace: ${schema.metadata.namespace}
+        spec:
+          ingressClassName: tailscale
+          # Hostname comes from spec.tls[].hosts, not metadata.name — the
+          # convention this repo's other ingresses already follow. The operator
+          # fills in the full tailnet FQDN, which status.url reads back.
+          tls:
+            - hosts:
+                - ${schema.spec.host}
+          rules:
+            - http:
+                paths:
+                  - path: /
+                    pathType: Prefix
+                    backend:
+                      service:
+                        name: ${schema.metadata.name}
+                        port:
+                          number: 80

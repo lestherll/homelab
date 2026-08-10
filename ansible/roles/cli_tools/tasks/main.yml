@@ -92,3 +92,35 @@
     mode: "0755"
     remote_src: true
   when: helm_needs_install
+
+# --- kubectl-cnpg: pinned GitHub release binary, checksum-verified ---------
+# The CloudNativePG kubectl plugin. Installed as a plain binary named
+# kubectl-cnpg on PATH, which is all kubectl's plugin mechanism needs for
+# `kubectl cnpg ...` to work.
+
+- name: Check installed kubectl-cnpg version
+  ansible.builtin.command: kubectl-cnpg version
+  register: cnpg_plugin_installed
+  changed_when: false
+  failed_when: false
+
+- name: Determine whether kubectl-cnpg needs (re)install
+  ansible.builtin.set_fact:
+    cnpg_plugin_needs_install: "{{ cnpg_plugin_version not in (cnpg_plugin_installed.stdout | default('')) }}"
+
+- name: Download and checksum-verify kubectl-cnpg release tarball
+  ansible.builtin.get_url:
+    url: "https://github.com/cloudnative-pg/cloudnative-pg/releases/download/v{{ cnpg_plugin_version }}/kubectl-cnpg_{{ cnpg_plugin_version }}_linux_{{ cnpg_arch }}.tar.gz"
+    dest: "/tmp/kubectl-cnpg_{{ cnpg_plugin_version }}_linux_{{ cnpg_arch }}.tar.gz"
+    checksum: "sha256:https://github.com/cloudnative-pg/cloudnative-pg/releases/download/v{{ cnpg_plugin_version }}/cnpg-{{ cnpg_plugin_version }}-checksums.txt"
+    mode: "0644"
+  when: cnpg_plugin_needs_install
+
+- name: Extract and install kubectl-cnpg binary
+  ansible.builtin.unarchive:
+    src: "/tmp/kubectl-cnpg_{{ cnpg_plugin_version }}_linux_{{ cnpg_arch }}.tar.gz"
+    dest: "{{ cli_tools_install_dir }}"
+    include: [kubectl-cnpg]
+    remote_src: true
+    mode: "0755"
+  when: cnpg_plugin_needs_install
