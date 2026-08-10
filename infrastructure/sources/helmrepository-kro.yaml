@@ -1,0 +1,17 @@
+# kro's chart is published only as an OCI artifact — there is no classic
+# index.yaml repository, so this is the first `type: oci` HelmRepository here.
+# `interval` is deliberately omitted: Flux does not poll OCI HelmRepositories
+# (the chart version is resolved from the HelmRelease at reconcile time), so
+# setting one would be inert config.
+#
+# Available tags re-verified against
+# https://registry.k8s.io/v2/kro/charts/kro/tags/list as of 2026-08-10:
+# latest is 0.9.3.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: kro
+  namespace: flux-system
+spec:
+  type: oci
+  url: oci://registry.k8s.io/kro/charts

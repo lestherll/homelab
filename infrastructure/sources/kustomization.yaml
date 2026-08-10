@@ -6,3 +6,4 @@ resources:
   - gitrepository-fastapi-echo.yaml
   - gitrepository-personal-finance-dashboard.yaml
   - helmrepository-cloudnative-pg.yaml
+  - helmrepository-kro.yaml
