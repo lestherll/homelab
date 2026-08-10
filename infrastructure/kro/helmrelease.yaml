@@ -1,0 +1,47 @@
+# kro (kube-resource-orchestrator) — the Layer-2 composition engine behind
+# infrastructure/platform-api/. A ResourceGraphDefinition there generates a
+# real CRD (Application, Database, ObjectStorage) and reconciles instances of
+# it into the underlying Deployments/Clusters/Buckets.
+#
+# Chart version re-verified against
+# https://registry.k8s.io/v2/kro/charts/kro/tags/list as of 2026-08-10: 0.9.3
+# (appVersion v0.9.3). Published as an OCI artifact only — see
+# infrastructure/sources/helmrepository-kro.yaml.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kro
+  namespace: kro-system
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: kro
+      version: "0.9.3"
+      sourceRef:
+        kind: HelmRepository
+        name: kro
+        namespace: flux-system
+  values:
+    rbac:
+      # The chart default is "unrestricted" — cluster-wide full access to every
+      # resource — kept only for backwards compatibility. "aggregation" gives
+      # kro a minimal self-management set and picks up whatever additional
+      # ClusterRoles carry the label
+      # `rbac.kro.run/aggregate-to-controller: "true"`.
+      #
+      # Chosen deliberately: CONCEPT.md §3.2 requires a principal's privileges
+      # be "enumerable from a document, not by experiment", and unrestricted
+      # mode makes that impossible by construction. The document is
+      # infrastructure/platform-api/rbac-kro-aggregate.yaml — every kind an RGD
+      # renders must be granted there, or reconciliation fails with a
+      # permission error rather than silently succeeding with more access than
+      # it needs.
+      mode: aggregation
+    deployment:
+      # Restated at the chart's own defaults rather than left implicit, so the
+      # platform's footprint stays visible in git (CONCEPT.md S10) and a chart
+      # bump can't change it without showing up in a diff.
+      resources:
+        requests: { cpu: 256m, memory: 128Mi }
+        limits: { cpu: 1000m, memory: 1024Mi }

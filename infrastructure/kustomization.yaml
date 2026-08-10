@@ -8,3 +8,4 @@ resources:
   - personal-finance-dashboard
   - storage
   - postgres
+  - kro
