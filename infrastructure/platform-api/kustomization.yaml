@@ -1,0 +1,8 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  # RBAC first: kro must be able to touch the kinds these RGDs render before
+  # the RGDs go active, or the first reconcile fails on permissions.
+  - rbac-kro-aggregate.yaml
+  - rgd-database.yaml
+  - rgd-application.yaml

@@ -1,0 +1,56 @@
+# The privilege document for kro.
+#
+# kro runs with `rbac.mode: aggregation` (see infrastructure/kro/helmrelease.yaml),
+# so its base role covers only its own machinery — ResourceGraphDefinitions,
+# GraphRevisions, CRDs, ConfigMaps, Leases, Events. It has no access to
+# anything an RGD renders unless granted here, via the aggregation label.
+#
+# This file is therefore load-bearing, not bookkeeping: adding a new kind to an
+# RGD without adding it here fails at reconcile time with a permission error.
+# That is the intended trade — CONCEPT.md §3.2 requires a principal's
+# privileges be enumerable from a document rather than discovered by
+# experiment, and this is that document.
+#
+# Rule of thumb when extending: grant the API groups the RGDs *render*, plus
+# the platform.homelab group itself (kro reconciles its own generated instance
+# CRDs and writes their status).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kro-platform-api
+  labels:
+    rbac.kro.run/aggregate-to-controller: "true"
+rules:
+  # The generated instance CRDs. kro needs watch here for its informers, and
+  # status write access to publish the resolution status the RGDs compute.
+  - apiGroups: ["platform.homelab"]
+    resources: ["*"]
+    verbs: ["*"]
+
+  # Rendered by the Application RGD.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Rendered by the Database RGD. The PodMonitor is what closes the
+  # currently-live gap where no CNPG cluster is scraped at all.
+  - apiGroups: ["postgresql.cnpg.io"]
+    resources: ["clusters"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["podmonitors"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Read-only. The Application RGD does not create Secrets — CloudNativePG
+  # mints <cluster>-app itself — but kro resolves references against them.
+  # Deliberately not writable: nothing in this platform's design has kro
+  # authoring credentials, and keeping it read-only makes that checkable.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]

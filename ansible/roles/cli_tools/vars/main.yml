@@ -5,10 +5,25 @@
 flux_version: "2.8.8"
 sops_version: "3.13.3"
 helm_version: "4.2.3"
+# kubectl-cnpg is the official CloudNativePG kubectl plugin — `kubectl cnpg
+# psql <cluster> -n <ns>` for interactive Postgres access against any Cluster,
+# which is why this platform builds no DB admin tooling of its own. Version
+# tracks the operator's appVersion (chart 0.29.0 → 1.30.0); re-verified
+# against https://github.com/cloudnative-pg/cloudnative-pg/releases as of
+# 2026-08-10.
+cnpg_plugin_version: "1.30.0"
 
 cli_tools_arch_map:
   x86_64: amd64
   aarch64: arm64
 cli_tools_arch: "{{ cli_tools_arch_map[ansible_architecture] | default(ansible_architecture) }}"
+
+# CloudNativePG names its release assets linux_x86_64 / linux_arm64, not the
+# amd64 convention every other tool here uses — hence a second map rather than
+# reusing cli_tools_arch.
+cnpg_arch_map:
+  x86_64: x86_64
+  aarch64: arm64
+cnpg_arch: "{{ cnpg_arch_map[ansible_architecture] | default(ansible_architecture) }}"
 
 cli_tools_install_dir: /usr/local/bin

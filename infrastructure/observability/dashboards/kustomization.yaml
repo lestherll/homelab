@@ -14,3 +14,15 @@ configMapGenerator:
     options:
       labels:
         grafana_dashboard: "1"
+  # cloudnativepg.json is the official CloudNativePG dashboard (grafana.com ID
+  # 20417, uid cloudnative-pg), published by the CloudNativePG org. Grafana's
+  # import-wizard metadata (__inputs/__requires/__elements) is stripped: the
+  # dashboard already carries a real DS_PROMETHEUS datasource templating
+  # variable that resolves on its own, and leaving those blocks in makes the
+  # sidecar treat the file as an un-imported export. Otherwise unmodified.
+  - name: grafana-dashboard-cloudnativepg
+    files:
+      - cloudnativepg.json
+    options:
+      labels:
+        grafana_dashboard: "1"
