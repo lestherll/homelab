@@ -132,7 +132,7 @@
 # bin dir. Hence unarchive + a command task rather than a single get_url.
 #
 # No arch map: AWS names its assets linux-x86_64 / linux-aarch64, which is
-# ansible_architecture verbatim on both — unlike the amd64/arm64 and
+# ansible_facts['architecture'] verbatim on both — unlike the amd64/arm64 and
 # CloudNativePG conventions that need the two maps in vars/main.yml.
 
 - name: Check installed awscli version
@@ -163,15 +163,15 @@
 
 - name: Download and checksum-verify awscli bundle
   ansible.builtin.get_url:
-    url: "https://awscli.amazonaws.com/awscli-exe-linux-{{ ansible_architecture }}-{{ awscli_version }}.zip"
-    dest: "/tmp/awscli-exe-linux-{{ ansible_architecture }}-{{ awscli_version }}.zip"
+    url: "https://awscli.amazonaws.com/awscli-exe-linux-{{ ansible_facts['architecture'] }}-{{ awscli_version }}.zip"
+    dest: "/tmp/awscli-exe-linux-{{ ansible_facts['architecture'] }}-{{ awscli_version }}.zip"
     checksum: "sha256:{{ awscli_sha256 }}"
     mode: "0644"
   when: awscli_needs_install
 
 - name: Extract awscli bundle
   ansible.builtin.unarchive:
-    src: "/tmp/awscli-exe-linux-{{ ansible_architecture }}-{{ awscli_version }}.zip"
+    src: "/tmp/awscli-exe-linux-{{ ansible_facts['architecture'] }}-{{ awscli_version }}.zip"
     dest: "/tmp/awscli-{{ awscli_version }}"
     remote_src: true
     creates: "/tmp/awscli-{{ awscli_version }}/aws/install"

@@ -32,12 +32,12 @@ awscli_version: "2.36.21"
 # undefined key rather than silently install unverified.
 awscli_sha256_map:
   x86_64: "b665b24dae1ed70bc38ef03998570307a0363839196b564bf04f8d7502132b9a"
-awscli_sha256: "{{ awscli_sha256_map[ansible_architecture] }}"
+awscli_sha256: "{{ awscli_sha256_map[ansible_facts['architecture']] }}"
 
 cli_tools_arch_map:
   x86_64: amd64
   aarch64: arm64
-cli_tools_arch: "{{ cli_tools_arch_map[ansible_architecture] | default(ansible_architecture) }}"
+cli_tools_arch: "{{ cli_tools_arch_map[ansible_facts['architecture']] | default(ansible_facts['architecture']) }}"
 
 # CloudNativePG names its release assets linux_x86_64 / linux_arm64, not the
 # amd64 convention every other tool here uses — hence a second map rather than
@@ -45,6 +45,6 @@ cli_tools_arch: "{{ cli_tools_arch_map[ansible_architecture] | default(ansible_a
 cnpg_arch_map:
   x86_64: x86_64
   aarch64: arm64
-cnpg_arch: "{{ cnpg_arch_map[ansible_architecture] | default(ansible_architecture) }}"
+cnpg_arch: "{{ cnpg_arch_map[ansible_facts['architecture']] | default(ansible_facts['architecture']) }}"
 
 cli_tools_install_dir: /usr/local/bin
