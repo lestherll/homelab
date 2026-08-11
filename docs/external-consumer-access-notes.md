@@ -163,9 +163,40 @@ retry-after window slid forward on each subsequent attempt.
 
 Critically, **one of the three was a hostname that had issued successfully on
 its first try earlier the same day** and then failed on a later recreate. So
-this is not per-hostname bad luck or a misconfiguration in any one manifest;
-something in the DNS-01 path for this tailnet degraded partway through
-2026-08-11. Not root-caused.
+this is not per-hostname bad luck or a misconfiguration in any one manifest.
+
+**Which limit this was, precisely.** The 429s were
+`too many failed authorizations (5) for <host> in the last 1h0m0s` — the
+failed-authorization limit, a rolling one-hour window, whose retry-after we
+watched slide forward on each further attempt. It was **not** the duplicate-
+certificate limit (5 identical certs per 168h), which is the more commonly cited
+Tailscale/Let's Encrypt trap and which would have meant a multi-day lockout. Worth
+stating explicitly because the two have very different recovery times, and the
+observed one recovers in minutes.
+
+**The rate limit was a consequence, not the cause.** Each hostname's *first*
+failure was `WaitOrder: OrderError status "invalid"` about one second after
+`SetDNS` returned, with no 429 involved — Let's Encrypt attempted validation and
+rejected it. The 429 only appeared after five such failures. The leading
+hypothesis is that the `_acme-challenge` TXT record is not yet visible to Let's
+Encrypt's validators at the moment they check, i.e. a propagation race that the
+client does not wait out. Unconfirmed.
+
+**What amplified it, and this part is confirmed.** The operator caches issued
+certificates in the proxy's own state Secret — a live proxy's Secret contains
+`<host>.crt`, `<host>.key` and `acme-account.key.pem` alongside its device
+state. But that Secret is named `ts-<name>-<random>-0` and is created and
+destroyed with the Ingress/Service it backs. **Deleting and recreating an
+exposure therefore always produces a new, empty state Secret and an
+unconditional fresh ACME order — there is no cross-recreate cert cache.** Five
+recreates of the same hostname within an hour is enough to lock it out on its
+own, independent of whatever is causing the underlying validation failure.
+
+This makes the churn pattern a first-class design concern rather than a testing
+artefact: a platform that creates and destroys a tailnet exposure per resource
+is, structurally, a certificate-churn machine. The candidate fix is a
+`ProxyGroup` — long-lived shared proxies whose state (and therefore cached
+certs) outlives any individual Ingress or Service. Not yet tested.
 
 **This is currently the blocker on the intended design, not a curiosity.** HTTPS
 with a real certificate is the route this platform wants for S3 — an external
@@ -190,10 +221,17 @@ Secondary implications, still valid regardless of how ACME is fixed:
 ## C. Still open
 
 - **Root-cause the ACME DNS-01 failure.** Now the top item: it blocks the HTTPS
-  path this design wants, and it blocks the L7 test below. Unknown whether the
-  cause is upstream (Tailscale's DNS-01 service, Let's Encrypt) or local. Worth
-  checking whether the TXT record is actually visible to public resolvers during
-  the challenge window, and whether HTTPS certs are still enabled for the tailnet.
+  path this design wants, and it blocks the L7 test below. The amplifier is
+  understood (no cert cache across recreates, above); the underlying
+  `OrderError status "invalid"` is not. Next probes: watch for the
+  `_acme-challenge.<host>.<tailnet>.ts.net` TXT record from a public resolver
+  during the challenge window to test the propagation-race hypothesis, and
+  confirm HTTPS certificates are still enabled for the tailnet.
+- **Test whether a `ProxyGroup` survives exposure churn.** If shared long-lived
+  proxies keep their state Secret — and therefore their cached certificate —
+  across Ingress/Service lifecycles, that removes the churn amplifier
+  independently of the root cause, and is likely wanted anyway for per-exposure
+  pod cost.
 - **Does SigV4 survive the Tailscale *Ingress*?** Still unmeasured. S3 request
   signing covers the `Host` header; if the L7 proxy rewrites it, signed requests
   fail `SignatureDoesNotMatch`. The L4 result above does *not* answer this —
