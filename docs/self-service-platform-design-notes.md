@@ -789,6 +789,54 @@ repo's existence.
   Kubernetes RBAC, and plain `kubectl apply` — **no new controller, no new
   platform component to run or maintain.**
 
+**Revised before any of this was built (pre-implementation design review,
+2026-08-11): the auth mechanism below is GitHub OIDC federation, not a
+stored bound-ServiceAccount token.** The original draft (directly below,
+in "One-time platform setup" and "Per-app onboarding") named the long-lived
+token explicitly as a PoC posture with GitHub OIDC federation as the named
+revisit trigger. Since nothing had been built yet, that revisit happens
+now rather than being built once and migrated later. What changed, and why:
+
+- **Auth model.** k3s's API server trusts `https://
+  token.actions.githubusercontent.com` directly (traditional single-issuer
+  `--oidc-*` apiserver flags — GA, no need for the newer structured
+  `AuthenticationConfiguration` file; confirmed against this cluster's live
+  version, k3s `v1.36.2`/Kubernetes 1.36, well past the 1.30 floor either
+  mechanism needs). Each CI run mints its own ID token at request time
+  (`permissions: id-token: write`, `actions/core`'s `getIDToken()`) and uses
+  it directly as the `kubectl` bearer credential. **No token is stored
+  anywhere, in any secret, ever** — it's minted fresh and expires in
+  minutes. This directly resolves the risk named below ("long-lived
+  bound-token rotation is undefined day-2 DX") by removing the long-lived
+  token rather than accepting its rotation cost.
+- **Cross-app isolation.** GitHub's OIDC `sub` claim already encodes the
+  calling repo (`repo:lestherll/<reponame>:ref:refs/heads/main`) — the
+  identity carries its own scope for free. One `ValidatingAdmissionPolicy`
+  (CEL-native, built into Kubernetes since 1.30, no extra controller),
+  written once as platform setup, enforces that a `gha:`-prefixed caller
+  may only mutate a `GitRepository`/`Kustomization` whose name/`spec.url`
+  matches the repo name embedded in *its own* `sub` — never another repo's.
+  This resolves the "no cross-app RBAC isolation" risk named below, without
+  adding a single per-app object to this repo: the policy is one static
+  rule that reads the caller's own identity, not a per-repo binding.
+- **Delete/offboarding.** The registrar Role gains the `delete` verb
+  (safe to grant now, since the same admission policy scopes it to
+  "delete your own objects only"), and each app's CI file gains a
+  `workflow_dispatch` teardown job reusing the same OIDC+Tailscale steps.
+  This resolves the "registrar's RBAC can't clean up even if CI tried" gap
+  named below. What it deliberately does **not** add: any automation that
+  reacts to a repo simply being deleted/archived on GitHub with no teardown
+  run first — that gap stays open, named, and policy-only (run teardown
+  before you archive), matching this repo's existing "review discipline,
+  not a controller" stance for single-operator gaps (D15 §3's Postgres-
+  sharing convention is the precedent).
+
+The rest of this section — "One-time platform setup" through
+"Verification" — is written to reflect this revision directly, not left as
+the superseded draft; the diffs above are recorded here so the *reasoning*
+for the change isn't lost, matching this doc's practice of stating
+corrections rather than silently rewriting them (see §5.1's precedent).
+
 **Confirmed safe and feasible (not assumed):**
 - Flux's `Kustomization` prune is scoped strictly to that Kustomization's
   own applied inventory (confirmed against `fluxcd.io/flux/components/
@@ -808,34 +856,62 @@ repo's existence.
 ### One-time platform setup (in this repo — a single cost, not per-app;
 ### same shape as D15 §1's kro/seaweedfs platform setup)
 
-1. **RBAC** (`infrastructure/ci-registrar/`): one `ServiceAccount`
-   (`ci-app-registrar`, namespace `flux-system`), one `Role` scoped to
-   `create`/`patch`/`get`/`list` on `gitrepositories.source.toolkit.fluxcd.io`
-   and `kustomizations.kustomize.toolkit.fluxcd.io` **in `flux-system`
-   only** — no `resourceNames` restriction (see Risks: no cross-app
-   isolation — deliberate, not an oversight), one `RoleBinding`.
-2. **Bound ServiceAccount token**, minted once
-   (`kubectl create token ci-app-registrar -n flux-system --duration=<long>`),
-   distributed manually into each app repo's GitHub Actions secrets at
-   onboarding time — never committed anywhere, including this repo.
-   **Named explicitly as a PoC security posture, not the intended
-   end-state**: Kubernetes' own docs mark long-lived ServiceAccount token
-   Secrets "(not recommended)," recommending TokenRequest-issued
-   short-lived tokens instead (confirmed at `kubernetes.io/docs/concepts/
-   security/service-accounts/`) — a long `--duration` here is a deliberate
-   trade against that guidance, acceptable only under AGENT.md's
-   single-operator/no-multi-tenancy trust model (§ Risks). **Concrete
-   revisit trigger**: GitHub Actions' OIDC identity federated directly to
-   the cluster (mirroring how it already federates to AWS/GCP/Azure
-   without static credentials) would eliminate the stored token entirely
-   — real work (k3s structured OIDC auth config), correctly deferred, not
-   built now.
-3. **Tailscale**: a new ACL tag `tag:ci` (admin-console-managed — this
-   repo has no ACL-as-code file, matching existing practice for
-   `tag:k8s-operator`) scoped to reach only the k3s host's `:6443`, not
-   the tailnet at large; a new OAuth client that auto-tags ephemeral
-   devices as `tag:ci`, generated once in the console. Client id/secret
-   distributed into each app repo's secrets, same as the token.
+1. **k3s API server trusts GitHub's OIDC issuer** (`ansible/roles/
+   k3s_server/templates/config.yaml.j2`, added to the existing
+   `kube-apiserver-arg` list):
+   ```yaml
+   kube-apiserver-arg:
+     - "oidc-issuer-url=https://token.actions.githubusercontent.com"
+     - "oidc-client-id=<chosen audience string, e.g. the tailnet API URL>"
+     - "oidc-username-claim=sub"
+     - "oidc-username-prefix=gha:"
+     - "oidc-groups-claim=repository_owner"
+     - "oidc-groups-prefix=gha:"
+   ```
+   Traditional single-issuer flags, not the newer structured
+   `AuthenticationConfiguration` file — this cluster only ever needs to
+   trust one issuer (GitHub's), so the simpler, longer-GA mechanism is the
+   right one, not the more general one. `repository_owner` is constant
+   (`lestherll`) across every app repo under this account, so the group
+   claim gives one stable, reusable RBAC subject without naming any
+   individual repo — that's what makes step 2 a one-time cost instead of a
+   per-app one.
+2. **RBAC** (`infrastructure/ci-registrar/`): one `Role` (namespace
+   `flux-system`) scoped to `create`/`patch`/`get`/`list`/`delete` on
+   `gitrepositories.source.toolkit.fluxcd.io` and
+   `kustomizations.kustomize.toolkit.fluxcd.io`, one `RoleBinding` naming
+   the OIDC group `gha:lestherll` as its subject — not a `ServiceAccount`,
+   since there's no in-cluster identity to bind to anymore. `delete` is
+   safe to include here (not deferred the way the original draft deferred
+   it) precisely because step 3's admission policy, not this Role, is what
+   actually scopes each caller to its own objects.
+3. **`ValidatingAdmissionPolicy` for per-repo isolation**
+   (`infrastructure/ci-registrar/`): one policy + binding, matched to
+   `CREATE`/`UPDATE`/`DELETE` on the same two Flux kinds, enforcing (in
+   CEL) that `request.userInfo.username` — which *is* the caller's
+   `sub`, e.g. `gha:repo:lestherll/fastapi-echo:ref:refs/heads/main` —
+   contains the exact repo-name segment matching the target object's name
+   (or `spec.url`). **Exact segment match, not substring `contains()`** —
+   named explicitly because a naive substring check would let
+   `fastapi-echo-evil` pass a check against `fastapi-echo`; the CEL must
+   split on `/` and `:` and compare the isolated segment, not do a raw
+   `contains`. This is the load-bearing security boundary for isolation
+   now (RBAC no longer is), so it gets the same "spike it in isolation
+   first" treatment the "Implementation sequencing" section below already
+   applies to D15's riskiest mechanism — test matrix: same-repo create/
+   patch/delete succeeds; a second throwaway repo identity attempting to
+   touch the first repo's objects is denied; a crafted repo name that's a
+   superstring/substring of another (the `fastapi-echo`/`fastapi-echo-evil`
+   case above) is denied in both directions.
+4. **Tailscale**: unchanged from the original draft — a new ACL tag
+   `tag:ci` (admin-console-managed — this repo has no ACL-as-code file,
+   matching existing practice for `tag:k8s-operator`) scoped to reach only
+   the k3s host's `:6443`, not the tailnet at large; a new OAuth client
+   that auto-tags ephemeral devices as `tag:ci`, generated once in the
+   console. Client id/secret distributed into each app repo's secrets.
+   Still needed regardless of the auth-model change above: the API server
+   is only reachable over the tailnet, and OIDC federation changes *who
+   the caller proves to be*, not *how the caller reaches the network*.
 
 ### Per-app onboarding (entirely app-repo-side — replaces old step 5;
 ### **this repo is never touched**)
@@ -848,15 +924,26 @@ repo's existence.
    `infrastructure/fastapi-echo/flux-kustomization.yaml`, just relocated.
    The `Kustomization`'s own `spec.path` still points at `./deploy`,
    unchanged.
-2. Add 5 GitHub Actions secrets to the app repo (one-time, GitHub UI, not
-   code): `TS_OAUTH_CLIENT_ID`, `TS_OAUTH_CLIENT_SECRET`, `KUBE_TOKEN`,
-   `KUBE_CA_CERT`, `KUBE_SERVER` (`https://100.121.11.84:6443`).
-3. Add one step to the app's existing build workflow:
-   `tailscale/github-action` (join as ephemeral `tag:ci` node) →
-   `kubectl apply -f flux/flux-pointer.yaml`. Idempotent — safe to run
-   on every push, only strictly needs to succeed once.
+2. Add 4 GitHub Actions secrets to the app repo (one-time, GitHub UI, not
+   code): `TS_OAUTH_CLIENT_ID`, `TS_OAUTH_CLIENT_SECRET`, `KUBE_CA_CERT`,
+   `KUBE_SERVER` (`https://100.121.11.84:6443`). **`KUBE_TOKEN` is gone** —
+   the original draft's fifth secret, replaced by a per-run OIDC token that
+   GitHub mints and CI requests live, never stored.
+3. Grant the workflow `permissions: id-token: write` and add two steps to
+   the app's existing build workflow: `tailscale/github-action` (join as
+   ephemeral `tag:ci` node) → request an OIDC ID token via
+   `actions/core`'s `getIDToken(<audience matching oidc-client-id above>)`
+   and `kubectl apply -f flux/flux-pointer.yaml --token=<that token>
+   --server=$KUBE_SERVER --certificate-authority=$KUBE_CA_CERT`.
+   Idempotent — safe to run on every push, only strictly needs to succeed
+   once.
 4. From here, Flux's own reconciliation takes over exactly as it does for
    every app today, independent of CI — unaffected by D16.
+5. **Offboarding**: a separate `workflow_dispatch`-triggered job in the
+   same CI file (e.g. `flux-teardown`), reusing steps 3's Tailscale+OIDC
+   setup, running `kubectl delete gitrepository,kustomization <name> -n
+   flux-system`. Manually triggered by the operator before archiving or
+   deleting the app repo — not automatic, see Risks below for why.
 
 ### Interaction with D15 (§1–§7 above) — checked for conflicts, one found and fixed
 
@@ -902,69 +989,109 @@ repo's existence.
   deliberate, narrow carve-out from AGENT.md's "declarative source of
   truth" framing — name it in CONCEPT.md's D16 entry and a
   disaster-recovery runbook note, don't let it be discovered mid-incident.
-- **No cross-app RBAC isolation.** One shared `ci-app-registrar`
-  token means a compromised app repo's CI secrets could rewrite ANY app's
-  `GitRepository` (e.g. repoint at a malicious fork), not just its own.
-  Accepted consistent with AGENT.md's explicit "single-user, no
-  multi-tenancy" scope and the same "review discipline is the enforcement
-  mechanism" reasoning D15 §3 already applies to Postgres sharing — named,
-  not silently ignored. **Named trigger to revisit:** per-app
-  `resourceNames`-scoped RBAC + a per-app-minted token, the day a second
-  real trust boundary exists — mirrors D15's own client-cert-auth revisit
-  trigger.
-- **Long-lived bound-token rotation is undefined day-2 DX** — same honest
-  "rotate + re-distribute" answer as D15's own credential-rotation risk.
-- **Secret sprawl moved, not eliminated.** Each app repo now carries 5
-  GitHub Action secrets, set once at onboarding via the GitHub UI. "Zero
-  changes to the homelab repo" is real and achieved — it is not "zero
-  onboarding effort"; the effort relocated to the app repo/GitHub UI side,
-  which was the actual ask.
-- **Orphaned registrations on app deletion — no lifecycle handling exists,
-  and this is new precisely because D16 moves registration out of git.**
-  CI's model handles push → register; nothing handles app deleted/renamed
-  → deregister. Because the pointer objects live only in-cluster, deleting
-  or archiving a GitHub repo leaves its `GitRepository`/`Kustomization`
-  reconciling forever against a repo that may no longer exist, and the
-  registrar's RBAC (`create`/`patch`/`get`/`list`, no `delete`) can't clean
-  it up even if CI tried. **Decision: handle this the same way as the
-  Postgres-sharing convention in D15 §3 — a documented manual policy, not
-  new automation.** Removing an app requires a manual `kubectl delete
-  gitrepository,kustomization <name> -n flux-system`, documented in the
-  onboarding doc's offboarding section. Building CI-driven or
-  controller-driven cleanup is real, avoidable complexity for a
-  single-operator repo — not built now.
+- **Cross-app isolation now depends on the `ValidatingAdmissionPolicy`'s
+  CEL being correct, not on RBAC.** This is a real shift in *where* the
+  security boundary lives (RBAC's `Role` is now deliberately broad —
+  scoped to the whole `gha:lestherll` group — and the policy is what
+  narrows it per-repo), not a removal of the boundary. If the CEL has a
+  bug (e.g. a substring match instead of exact-segment match, per the
+  `fastapi-echo`/`fastapi-echo-evil` case named above), the practical
+  effect is identical to the original draft's accepted "no isolation"
+  risk — so the test matrix named in "One-time platform setup" step 3
+  isn't optional polish, it's what makes the isolation claim true.
+  **Revisit trigger, updated:** unchanged in spirit from the original
+  draft — per-repo `resourceNames`-scoped RBAC becomes worth the extra
+  per-app wiring the day a second real trust boundary exists (e.g.
+  multiple humans, not just multiple repos, needing isolation from each
+  other) and CEL-policy enforcement alone stops being sufficient.
+- **Single-issuer constraint.** The traditional `--oidc-*` apiserver flags
+  trust exactly one issuer/one client-id cluster-wide — fine here, since
+  GitHub Actions is the only OIDC issuer this cluster will ever need to
+  trust, but worth naming as a permanent shape: a second issuer (a
+  different CI provider, a human SSO provider) would require migrating to
+  the structured `AuthenticationConfiguration` file mechanism instead,
+  real work, not assumed free.
+- **Secret sprawl moved, not eliminated — now 4, not 5.** Each app repo
+  still carries `TS_OAUTH_CLIENT_ID`/`TS_OAUTH_CLIENT_SECRET`/
+  `KUBE_CA_CERT`/`KUBE_SERVER`, set once at onboarding via the GitHub UI.
+  "Zero changes to the homelab repo" is real and achieved — it is not
+  "zero onboarding effort"; the effort relocated to the app repo/GitHub UI
+  side, which was the actual ask. `KUBE_TOKEN` — the one genuinely
+  sensitive, rotation-bearing secret of the original five — is gone.
+- **Orphaned registrations on app deletion — now has a working manual
+  path, but no automatic one.** The registrar Role now includes `delete`
+  (scoped per-repo by the admission policy), and each app's CI carries a
+  `workflow_dispatch` teardown job (per-app onboarding step 5), so
+  cleanup is no longer blocked the way the original draft found it to be.
+  What's still true: nothing reacts automatically to a GitHub repo being
+  deleted/archived without that job having been run first — the pointer
+  objects keep reconciling (harmlessly — `GitRepository` just fails to
+  fetch) against a repo that may no longer exist. **Decision unchanged
+  from the original draft: handle this as a documented manual policy** —
+  run teardown before archiving, same "review discipline, not a
+  controller" reasoning as D15 §3's Postgres-sharing convention. Building
+  reactive (webhook- or poll-driven) cleanup is real, avoidable complexity
+  for a single-operator repo — not built now.
 - **`tag:ci`'s Tailscale ACL scope is a real security boundary** — must
   restrict to the k3s host's `:6443` specifically, not tailnet-wide
   access; verify with `tailscale status`/an ACL test during
   implementation, don't assume the console config is correct.
+- **Breaks full git-reconstructibility for this one class of object.** A
+  full cluster rebuild from git (Ansible converge + Flux bootstrap) would
+  NOT recreate app `GitRepository`/`Kustomization` objects — each app's CI
+  needs manual re-triggering (`workflow_dispatch`) post-rebuild. A
+  deliberate, narrow carve-out from AGENT.md's "declarative source of
+  truth" framing — name it in CONCEPT.md's D16 entry and a
+  disaster-recovery runbook note, don't let it be discovered mid-incident.
 
 ### Files to add/change (this repo, one-time only)
 
-- `infrastructure/ci-registrar/` — `ServiceAccount`, `Role`, `RoleBinding`
-  (namespace `flux-system`), kustomization
+- `ansible/roles/k3s_server/templates/config.yaml.j2` — add the
+  `kube-apiserver-arg` OIDC flags (issuer, client-id, username/groups
+  claim+prefix)
+- `infrastructure/ci-registrar/` — `Role`, `RoleBinding` (namespace
+  `flux-system`, subject is the OIDC group `gha:lestherll`, not a
+  `ServiceAccount`), `ValidatingAdmissionPolicy` + binding (per-repo
+  isolation), kustomization
 - `infrastructure/kustomization.yaml` — add `ci-registrar`
 - `CONCEPT.md` — D16 entry: the CI-self-registration mechanism chosen over
-  ArgoCD `ApplicationSet` and `gitopssets-controller` (and why); the
-  declarative-source-of-truth carve-out named explicitly; the
-  no-cross-app-isolation tradeoff and its revisit trigger
+  ArgoCD `ApplicationSet` and `gitopssets-controller` (and why); GitHub
+  OIDC federation as the auth model (superseding the original bound-token
+  draft before it was ever built); the admission-policy isolation
+  mechanism; the declarative-source-of-truth carve-out named explicitly
 - `docs/gitops-onboarding-learnings.md` — update the checklist: step 5
   ("small pointer in homelab repo") replaced with "app repo:
-  `flux/flux-pointer.yaml` + CI step + 5 GitHub secrets, homelab repo
-  untouched"
+  `flux/flux-pointer.yaml` + CI step (OIDC + Tailscale) + 4 GitHub
+  secrets + a teardown job, homelab repo untouched"
 - **Manual, outside version control** (named explicitly, not files): a
-  Tailscale admin-console ACL grant for `tag:ci` + a scoped OAuth client;
-  one-time `kubectl create token` mint
+  Tailscale admin-console ACL grant for `tag:ci` + a scoped OAuth client.
+  No token to mint — this is the one line the original draft had here
+  that's gone entirely, not replaced.
 
 ### Verification
 
 - `kubectl auth can-i create gitrepositories.source.toolkit.fluxcd.io -n
-  flux-system --as=system:serviceaccount:flux-system:ci-app-registrar` →
-  yes; same check against a namespace outside `flux-system`, or a
-  non-Flux resource type → no.
+  flux-system --as=gha:repo:lestherll/fastapi-echo:ref:refs/heads/main
+  --as-group=gha:lestherll` → yes (RBAC layer only — the admission policy
+  is a separate check, see below); same check against a namespace outside
+  `flux-system`, or a non-Flux resource type → no.
+- **Isolation proof, both directions (new — the load-bearing check for
+  this revision):** from two throwaway repo identities (`--as` impersonating
+  two different `sub` values), confirm identity A can create/patch/delete a
+  `GitRepository` named for repo A, is **denied** attempting the same
+  against repo B's object, and the reverse. Include the named
+  substring-collision case explicitly: an object named `fastapi-echo`
+  and an identity for `fastapi-echo-evil` (or vice versa) must be denied,
+  not pass on a loose match.
 - A test app repo's CI run succeeds end-to-end with **zero commits to the
-  homelab repo**: `git log` here shows nothing new; `kubectl get
+  homelab repo** and **zero stored Kubernetes secrets in the app repo**:
+  `git log` here shows nothing new; `kubectl get
   gitrepository,kustomization -n flux-system` shows the new app's objects;
-  the app's own `Kustomization` reconciles successfully.
+  the app's own `Kustomization` reconciles successfully; the app repo's
+  GitHub Actions secrets contain no `KUBE_TOKEN`-equivalent value.
+- The teardown `workflow_dispatch` job successfully deletes a throwaway
+  app's `GitRepository`/`Kustomization`; re-running it against
+  already-deleted objects is a no-op, not an error.
 - Tailscale admin console / `tailscale status` confirms the CI's ephemeral
   node joined tagged `tag:ci`, and that it can reach `:6443` but nothing
   else on the tailnet.

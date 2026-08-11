@@ -36,6 +36,18 @@
     proto: tcp
     comment: "node-exporter — tailnet only"
 
+# The k3s API server binds 0.0.0.0:6443 by default. Scope it to the tailnet so
+# kubectl/flux work from other tailscale devices (kubeconfig points at this
+# host's tailscale IP, already a TLS SAN) without exposing the API to the LAN.
+- name: Allow k3s API port 6443 on the tailscale interface only
+  community.general.ufw:
+    rule: allow
+    interface: "{{ tailscale_interface }}"
+    direction: in
+    port: "6443"
+    proto: tcp
+    comment: "k3s API — tailnet only"
+
 # sshd listens on all interfaces on this host already (confirmed via `ss -tlnp`)
 # — kept open on all interfaces rather than scoped to tailscale0, so enabling
 # ufw doesn't change how this host is reached today (LAN, tailnet, wherever).
