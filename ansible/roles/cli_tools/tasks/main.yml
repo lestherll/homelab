@@ -124,3 +124,66 @@
     remote_src: true
     mode: "0755"
   when: cnpg_plugin_needs_install
+
+# --- awscli: pinned AWS-hosted zip, checksum-verified ----------------------
+# The odd one out in this role. Every other tool here is a drop-in binary;
+# AWS CLI v2 ships a bundle whose own installer lays out
+# /usr/local/aws-cli/v2/<version> and symlinks aws + aws_completer into the
+# bin dir. Hence unarchive + a command task rather than a single get_url.
+#
+# No arch map: AWS names its assets linux-x86_64 / linux-aarch64, which is
+# ansible_architecture verbatim on both — unlike the amd64/arm64 and
+# CloudNativePG conventions that need the two maps in vars/main.yml.
+
+- name: Check installed awscli version
+  ansible.builtin.command: aws --version
+  register: awscli_installed
+  changed_when: false
+  failed_when: false
+
+- name: Determine whether awscli needs (re)install
+  ansible.builtin.set_fact:
+    awscli_needs_install: "{{ awscli_version not in (awscli_installed.stdout | default('')) }}"
+
+- name: Install unzip (required by unarchive to extract the awscli bundle)
+  ansible.builtin.apt:
+    name: unzip
+    state: present
+    update_cache: true
+  when: awscli_needs_install
+
+- name: Create versioned extract directory for the awscli bundle
+  # Version-scoped so a stale /tmp/aws from an older bundle can never be the
+  # thing that gets installed.
+  ansible.builtin.file:
+    path: "/tmp/awscli-{{ awscli_version }}"
+    state: directory
+    mode: "0755"
+  when: awscli_needs_install
+
+- name: Download and checksum-verify awscli bundle
+  ansible.builtin.get_url:
+    url: "https://awscli.amazonaws.com/awscli-exe-linux-{{ ansible_architecture }}-{{ awscli_version }}.zip"
+    dest: "/tmp/awscli-exe-linux-{{ ansible_architecture }}-{{ awscli_version }}.zip"
+    checksum: "sha256:{{ awscli_sha256 }}"
+    mode: "0644"
+  when: awscli_needs_install
+
+- name: Extract awscli bundle
+  ansible.builtin.unarchive:
+    src: "/tmp/awscli-exe-linux-{{ ansible_architecture }}-{{ awscli_version }}.zip"
+    dest: "/tmp/awscli-{{ awscli_version }}"
+    remote_src: true
+    creates: "/tmp/awscli-{{ awscli_version }}/aws/install"
+  when: awscli_needs_install
+
+- name: Run the awscli installer
+  # --update makes this safe whether or not a previous version is present;
+  # without it the installer hard-fails when an install already exists.
+  ansible.builtin.command:
+    cmd: >-
+      /tmp/awscli-{{ awscli_version }}/aws/install --update
+      --install-dir /usr/local/aws-cli
+      --bin-dir {{ cli_tools_install_dir }}
+  when: awscli_needs_install
+  changed_when: true
