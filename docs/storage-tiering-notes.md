@@ -35,6 +35,13 @@ The thing this document is about — Kubernetes persistent volumes — was 1.9G,
 space today.** The immediate space is in ollama, containerd, and podman, none of
 which this repo manages.
 
+Acting on that took root from 48G to 39G the same day: `k3s crictl rmi --prune`
+recovered ~6G of unreferenced containerd layers (live images went 3.4G → 2.0G,
+40 tags → 25), and a `podman system reset` recovered the 4.4G legacy stack —
+images *and* the four volumes of the pre-k3s podman monitoring setup, which are
+gone for good. Ollama's 17.5G was left alone deliberately; it is out of scope for
+this repo and is now ~46% of everything on the SSD.
+
 Two findings worth recording separately:
 
 - **containerd's 13G is mostly garbage that will never be collected.** kubelet
@@ -104,48 +111,82 @@ importantly — **asserts the disk is mounted**. Without that guard, an unmounte
 `/mnt/storage` turns the bulk tier into a directory on the SSD, silently doing
 the exact opposite of what the tier is for.
 
-## Outstanding
+## Runbook: moving a StatefulSet's PVC between tiers
 
-- **SeaweedFS volume migration is staged, not executed.** The class change is in
-  git; the PVC still has to be recreated by hand, because a StatefulSet's
-  `volumeClaimTemplates` are immutable — the operator cannot roll this for us.
-  The runbook is below.
+Executed 2026-08-11 for `mount0-seaweed-volume-0` (SSD → bulk). Kept because
+this is the generic procedure for *any* operator-managed StatefulSet volume, and
+two steps in it are not obvious.
 
-### Runbook: moving `mount0-seaweed-volume-0` to the bulk tier
-
-Only ~468K of data at the time of writing, and the source PV is `Retain`, so a
-botched run loses nothing — the old directory stays until it is deliberately
-removed. Because local-path volumes are plain host directories, the copy is a
-host-level `cp`, not an in-cluster Job.
+A StatefulSet's `volumeClaimTemplates` are immutable, so changing
+`storageClassName` in the Seaweed CR does not roll the volume — the claim has to
+be recreated by hand. Because local-path volumes are plain host directories, the
+copy is a host-level `rsync`, not an in-cluster Job.
 
 ```sh
-# 1. Stop Flux fighting the scale-down. Do this BEFORE merging the class
-#    change: applied against a live StatefulSet, the new storageClassName is
-#    rejected as an immutable-field update and the Kustomization goes NotReady.
+# 1. Suspend BEFORE merging the class change: applied against a live
+#    StatefulSet, the new storageClassName is rejected as an immutable-field
+#    update and the Kustomization goes NotReady.
 flux suspend kustomization infrastructure-seaweedfs-runtime
+# ... merge the class change ...
 
-# 2. Drop the StatefulSet (PVC survives; volumeClaimTemplates are immutable,
-#    so the operator cannot update it in place).
+# 2. Drop the StatefulSet and release the old claim. The PV is Retain, so the
+#    old data directory persists untouched.
 kubectl delete sts seaweed-volume -n seaweedfs --cascade=foreground
-
-# 3. Release the old claim. The PV is Retain — the data directory persists.
 kubectl delete pvc mount0-seaweed-volume-0 -n seaweedfs
 
-# 4. Let the operator rebuild against local-path-bulk, then stop it again so
-#    the copy lands underneath a process that isn't writing.
+# 3. Let the operator rebuild against the new class. The claim is
+#    WaitForFirstConsumer, so it only binds once the pod schedules — the pod
+#    has to come up (empty) before the destination directory exists at all.
 flux resume kustomization infrastructure-seaweedfs-runtime
+
+# 4. Now stop it again for the copy. Suspending Flux is NOT enough: the
+#    seaweedfs-operator owns the replica count and reconciles the StatefulSet
+#    straight back to the CR's volume.replicas. The operator has to come down
+#    too, or `scale --replicas=0` silently reverts within seconds.
+kubectl scale deploy seaweedfs-operator -n seaweedfs --replicas=0
 kubectl scale sts seaweed-volume -n seaweedfs --replicas=0
+kubectl wait --for=delete pod/seaweed-volume-0 -n seaweedfs --timeout=90s
 
-# 5. Copy old -> new on the host (paths from `kubectl get pv`).
-sudo cp -a /var/lib/rancher/k3s/storage/<old-pv>_seaweedfs_mount0-seaweed-volume-0/. \
-           /mnt/storage/k8s-volumes/<new-pv>_seaweedfs_mount0-seaweed-volume-0/
+# 5. Mirror old -> new (exact paths from `kubectl get pv`). --delete makes this
+#    a directory-level restore, overwriting the vol_dir.uuid the empty server
+#    wrote at startup, so the volume server comes back as the same store and
+#    re-registers its volumes with the master.
+sudo rsync -a --delete \
+  /var/lib/rancher/k3s/storage/<old-pv>_seaweedfs_mount0-seaweed-volume-0/ \
+  /mnt/storage/k8s-volumes/<new-pv>_seaweedfs_mount0-seaweed-volume-0/
 
-# 6. Back up, and verify the bucket still lists its objects.
+# 6. Back up, operator last.
 kubectl scale sts seaweed-volume -n seaweedfs --replicas=1
+kubectl scale deploy seaweedfs-operator -n seaweedfs --replicas=1
 ```
 
-Only once the bucket reads correctly: delete the old PV object and `rm -rf` its
-directory.
+**Verify by reading an object's bytes, not by listing.** Filer metadata lives on
+a different volume from the object data, so a bucket lists its contents
+perfectly while every read fails — listing proves nothing about whether the copy
+worked. Fetch a known file through the filer and check its content.
+
+Note the volume server's readiness probe is `periodSeconds: 90`, so the pod sits
+at `0/1` for up to a minute and a half after each restart with nothing wrong.
+
+If the objects don't come back, bounce `seaweed-master-0`: the master rebuilds
+topology from volume-server heartbeats, and it has been hearing "empty" for the
+duration of the migration.
+
+**Confirmed after the move:** the master reported `Max: 8900` writable slots,
+up from the SSD-derived figure — SeaweedFS sizes slots from the backing
+filesystem's free space, so relocating a volume silently changes what
+`volumeSizeLimitMB` computes against. Worth re-reading that comment in
+`seaweed-cluster.yaml` whenever a volume moves.
+
+## Outstanding
+
+- **The pre-migration SeaweedFS PV is still on the SSD.**
+  `pvc-aa811e20-74b5-427f-8c39-7f97ca70518c` is `Released` with `Retain`,
+  holding the ~468K of pre-move volume data at
+  `/var/lib/rancher/k3s/storage/pvc-aa811e20-…_seaweedfs_mount0-seaweed-volume-0`.
+  Deliberately kept as the rollback until the bulk tier has proven itself over a
+  few days. Reclaiming it is `kubectl delete pv` plus a manual `rm -rf` — the
+  object and the directory are separate deletions.
 
 - **One orphaned PV — resolved 2026-08-11.** `pvc-9da4a7e4-…`
   (`fastapi-echo/fastapi-echo-db-1`) was `Released` with `Retain` and stranded.
