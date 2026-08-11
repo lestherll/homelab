@@ -46,15 +46,22 @@ spec:
     # explicit test the first time a genuinely large object is stored.
     volumeSizeLimitMB: 100
 
-  # PVC-backed, on local-path-retain: volume data is the platform's own
+  # PVC-backed, on local-path-bulk: volume data is the platform's own
   # analogue of a Postgres PGDATA volume — losing it loses every object in
   # every bucket. Labelled durable for the same reason CNPG's storage is
   # (D4), so unlabelled-volume alerting (once built) doesn't miss it.
+  #
+  # Bulk tier (the 931G spinning disk) rather than the SSD: object storage is
+  # the one component here designed to grow without bound, and its access
+  # pattern is large and sequential — the case the HDD is good at. Note this
+  # also changes what the volumeSizeLimitMB note above computes against:
+  # SeaweedFS sizes Max writable slots off the *backing filesystem's* free
+  # space, which is now /mnt/storage's ~870G rather than the SSD's ~60G.
   volume:
     replicas: 1
     requests:
       storage: 5Gi
-    storageClassName: local-path-retain
+    storageClassName: local-path-bulk
     labels:
       platform.homelab/durability: durable
     metricsPort: 9411
@@ -70,6 +77,13 @@ spec:
     # bearing as the volume data above — without persistence it lives only
     # in the pod's writable layer and is lost on every restart. Same
     # durability treatment as volume, above.
+    #
+    # Deliberately stays on the SSD while volume data moved to local-path-bulk:
+    # this is a leveldb index, so it's small (340K against the volume's 468K at
+    # the time of the split) and random-access — every object lookup pays its
+    # latency. It's the opposite access pattern to the bulk data it indexes, and
+    # a 5400rpm disk is the wrong home for it regardless of how large the
+    # objects themselves get.
     persistence:
       enabled: true
       storageClassName: local-path-retain

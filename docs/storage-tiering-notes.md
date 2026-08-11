@@ -66,9 +66,15 @@ Placement rules, in the order they actually get argued about:
   also explicitly *disposable* per CONCEPT.md §D4 — there is nothing to protect,
   so paying a performance cost to relocate it buys nothing. Bound its size with
   `retentionSize` instead.
-- **SeaweedFS volume/filer data belongs on the HDD.** Large, sequential, and the
-  one component on the platform designed to grow without bound. This is the
+- **SeaweedFS volume data belongs on the HDD.** Large, sequential, and the one
+  component on the platform designed to grow without bound. This is the
   motivating case for the tier.
+- **The SeaweedFS filer does not.** It looks like it should move with the volume
+  data it indexes, but it's a leveldb metadata store: small (340K against the
+  volume's 468K when the two were split) and random-access, paying its latency
+  on every object lookup. Opposite access pattern, opposite tier. The split is
+  the useful precedent here — "which component" is the wrong granularity for
+  this decision, "which access pattern" is the right one.
 - **Grafana and Alertmanager are 1Gi each and not worth moving.**
 
 ## Mechanism: a second provisioner, not a reconfigured one
@@ -100,17 +106,53 @@ the exact opposite of what the tier is for.
 
 ## Outstanding
 
-- **SeaweedFS is not yet migrated.** The class exists; nothing uses it. Moving
-  `mount0-seaweed-volume-0` (5Gi) and `seaweed-filer-seaweed-filer-0` (1Gi)
-  needs a PVC recreate, which means downtime and an in-cluster copy Job
-  mounting old and new claims. Both PVs are `Retain`, so the old data survives a
-  botched attempt. Suspend the `infrastructure-seaweedfs-runtime` Kustomization
-  first or Flux will fight the scale-down.
-- **One orphaned PV.** `pvc-9da4a7e4-21be-42ea-a448-29f1c859c031`
-  (`fastapi-echo/fastapi-echo-db-1`) is `Released` with `Retain`, so its
-  directory under `/var/lib/rancher/k3s/storage` is stranded — nothing will ever
-  reclaim it. Deleting the PV object does not delete the data; the directory
-  needs a manual `rm`.
+- **SeaweedFS volume migration is staged, not executed.** The class change is in
+  git; the PVC still has to be recreated by hand, because a StatefulSet's
+  `volumeClaimTemplates` are immutable — the operator cannot roll this for us.
+  The runbook is below.
+
+### Runbook: moving `mount0-seaweed-volume-0` to the bulk tier
+
+Only ~468K of data at the time of writing, and the source PV is `Retain`, so a
+botched run loses nothing — the old directory stays until it is deliberately
+removed. Because local-path volumes are plain host directories, the copy is a
+host-level `cp`, not an in-cluster Job.
+
+```sh
+# 1. Stop Flux fighting the scale-down. Do this BEFORE merging the class
+#    change: applied against a live StatefulSet, the new storageClassName is
+#    rejected as an immutable-field update and the Kustomization goes NotReady.
+flux suspend kustomization infrastructure-seaweedfs-runtime
+
+# 2. Drop the StatefulSet (PVC survives; volumeClaimTemplates are immutable,
+#    so the operator cannot update it in place).
+kubectl delete sts seaweed-volume -n seaweedfs --cascade=foreground
+
+# 3. Release the old claim. The PV is Retain — the data directory persists.
+kubectl delete pvc mount0-seaweed-volume-0 -n seaweedfs
+
+# 4. Let the operator rebuild against local-path-bulk, then stop it again so
+#    the copy lands underneath a process that isn't writing.
+flux resume kustomization infrastructure-seaweedfs-runtime
+kubectl scale sts seaweed-volume -n seaweedfs --replicas=0
+
+# 5. Copy old -> new on the host (paths from `kubectl get pv`).
+sudo cp -a /var/lib/rancher/k3s/storage/<old-pv>_seaweedfs_mount0-seaweed-volume-0/. \
+           /mnt/storage/k8s-volumes/<new-pv>_seaweedfs_mount0-seaweed-volume-0/
+
+# 6. Back up, and verify the bucket still lists its objects.
+kubectl scale sts seaweed-volume -n seaweedfs --replicas=1
+```
+
+Only once the bucket reads correctly: delete the old PV object and `rm -rf` its
+directory.
+
+- **One orphaned PV — resolved 2026-08-11.** `pvc-9da4a7e4-…`
+  (`fastapi-echo/fastapi-echo-db-1`) was `Released` with `Retain` and stranded.
+  Worth remembering as a class of problem: `Retain` means a deleted PVC leaves
+  both a `Released` PV object *and* its directory behind, and nothing ever
+  reclaims either. Every `local-path-retain` and `local-path-bulk` volume will
+  do this. Deleting the PV object does not delete the data.
 - **No backup target.** 870G of empty spinning disk is the natural home for the
   off-host backup CONCEPT.md C9/S4 flags as deferred. Not designed, not built.
   Note that an on-host backup on a second disk protects against disk failure and
