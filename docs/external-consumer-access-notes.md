@@ -115,6 +115,21 @@ tested, and deleted. Tailscale operator 1.98.9, tailnet `tailf4742d.ts.net`.
 - **Path-style S3 addressing survives the Ingress routing.** An unsigned request
   to `https://<host>/<bucket>` returned a proper S3 XML error with `<BucketName>`
   correctly parsed, so SeaweedFS received and parsed the path as expected.
+- **SigV4 works over the tailnet, and prefix-scoped credentials work from
+  outside the cluster.** A real signed request from a tailnet client — using the
+  live `personal-finance-dashboard-data-s3` credentials, path-style addressing,
+  against the `personal-finance-dashboard-data/` prefix — listed the expected
+  object. So the *product* question is answered: an off-platform consumer on the
+  tailnet can genuinely use this platform's S3 with the credentials the platform
+  issues.
+
+  **Important caveat on how this was measured.** It was run against the S3
+  gateway exposed at **L4** (`loadBalancerClass: tailscale`, plain HTTP on 8333),
+  *not* through the Tailscale Ingress — because Ingress exposure was blocked by
+  the ACME failure below. An L4 proxy forwards raw TCP and never touches HTTP
+  headers, so `Host` reaches SeaweedFS untouched by construction. **This
+  therefore does not validate the L7/Ingress path**, which is the intended one
+  (see below).
 
 **Confirmed broken / constrained:**
 
@@ -139,35 +154,58 @@ tested, and deleted. Tailscale operator 1.98.9, tailnet `tailf4742d.ts.net`.
 
 ### Unanticipated finding: `*.ts.net` certificate issuance is flaky and rate-limited
 
-Two separate hostnames failed ACME DNS-01 with `WaitOrder: OrderError status
+**Three** hostnames failed ACME DNS-01 with `WaitOrder: OrderError status
 "invalid"` roughly one second after the `SetDNS` call completed — including one
 that failed *before* any request was made to it, so this is not a
 request-triggered race. Let's Encrypt then applied its "too many failed
-authorizations (5) for <host> in the last 1h" limit, and the retry-after window
-slid forward on each subsequent attempt. A third hostname had succeeded on the
-first try roughly 40 minutes earlier, so the failure is intermittent, not
-configuration-dependent.
+authorizations (5) for <host> in the last 1h" limit per hostname, and the
+retry-after window slid forward on each subsequent attempt.
 
-**This constrains the design directly.** A platform that mints one tailnet
-hostname per `Database` inherits Let's Encrypt rate limits and an unreliable
-issuance path on every provision. It is a concrete argument for:
+Critically, **one of the three was a hostname that had issued successfully on
+its first try earlier the same day** and then failed on a later recreate. So
+this is not per-hostname bad luck or a misconfiguration in any one manifest;
+something in the DNS-01 path for this tailnet degraded partway through
+2026-08-11. Not root-caused.
 
-- exposing the **shared** S3 gateway once rather than per-`ObjectStorage`
+**This is currently the blocker on the intended design, not a curiosity.** HTTPS
+with a real certificate is the route this platform wants for S3 — an external
+consumer's SDK should get a properly authenticated TLS endpoint, not plain HTTP
+with "the tailnet is encrypted anyway" as the justification. That argument is
+true but it is a fallback rationale, not a design goal, and it silently drops
+server authentication and any prospect of using this outside a WireGuard mesh.
+
+So the ACME failure has to be **root-caused and fixed**, not routed around. The
+L4 exposure used above is a diagnostic that unblocked measurement; it is
+explicitly *not* the chosen mechanism.
+
+Secondary implications, still valid regardless of how ACME is fixed:
+
+- expose the **shared** S3 gateway once rather than per-`ObjectStorage`
   (which the sharing model already implies — see `rgd-objectstorage.yaml`), and
-- `ProxyGroup`-shared proxies over a hostname per resource, and
-- treating exposure as a deliberate, explicit act rather than a casual default.
+- prefer `ProxyGroup`-shared proxies over a hostname per resource, and
+- treat exposure as a deliberate, explicit act rather than a casual default —
+  a platform minting a hostname per `Database` inherits these rate limits on
+  every provision.
 
 ## C. Still open
 
-- **Does SigV4 survive the Tailscale Ingress?** *The highest-risk item in the
-  design, and still unmeasured.* S3 request signing covers the `Host` header; if
-  the Ingress rewrites it, every signed request fails `SignatureDoesNotMatch` and
-  the external-S3 path needs rethinking. Routing and path parsing are confirmed
-  fine (above), but that says nothing about `Host`. Blocked during this session:
-  credential-carrying test pods were refused by the tooling's permission
-  classifier, and the credential-free echo-server approach was killed by the ACME
-  failure above. **Re-run this first.**
+- **Root-cause the ACME DNS-01 failure.** Now the top item: it blocks the HTTPS
+  path this design wants, and it blocks the L7 test below. Unknown whether the
+  cause is upstream (Tailscale's DNS-01 service, Let's Encrypt) or local. Worth
+  checking whether the TXT record is actually visible to public resolvers during
+  the challenge window, and whether HTTPS certs are still enabled for the tailnet.
+- **Does SigV4 survive the Tailscale *Ingress*?** Still unmeasured. S3 request
+  signing covers the `Host` header; if the L7 proxy rewrites it, signed requests
+  fail `SignatureDoesNotMatch`. The L4 result above does *not* answer this —
+  raw TCP forwarding preserves `Host` by construction, an HTTP reverse proxy need
+  not. This is the remaining risk on the intended HTTPS route, and it can only be
+  tested once cert issuance works again.
 - Whether `serverAltDNSNames` actually lands in a generated certificate.
+- Whether prefix isolation still holds over an external endpoint — a signed
+  request within the consumer's own prefix succeeded, but the negative case (an
+  unscoped bucket-root list, expected `AccessDenied`) was not re-run externally.
+  Server-side IAM should make this identical to the in-cluster behaviour proven
+  during D15, but "should" is why it is listed here.
 - `DatabaseRole.clientCertificate` end-to-end, including `pg_hba` and driver
   support — the deepest unknown, and what decides whether the binding Secret
   contract can ever be uniform.
@@ -189,3 +227,43 @@ added to Flux — Flux does not prune objects it never applied, so no suspension
 was needed (contrast with the standing rule for testing *managed* manifests).
 All spike objects, generated CRDs, and tailnet devices were removed afterwards
 and the baseline re-verified.
+
+The S3 measurement needs `aws` on the host (added to the `cli_tools` role) and
+a tailnet endpoint. The L4 exposure that unblocked it, kept here because it is
+the diagnostic to reach for when ACME is misbehaving — **not** as the proposed
+mechanism:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: s3-lb-spike
+  namespace: seaweedfs
+spec:
+  type: LoadBalancer
+  loadBalancerClass: tailscale
+  selector:            # must match seaweed-s3's own selector exactly
+    app.kubernetes.io/component: s3
+    app.kubernetes.io/instance: seaweed
+    app.kubernetes.io/name: seaweedfs
+  ports:
+    - name: s3
+      port: 8333
+      targetPort: 8333
+```
+
+It comes up in well under a minute with no ACME involved, at
+`<namespace>-<name>.<tailnet>.ts.net:8333`. Then, from any tailnet device (note
+`addressing_style = path` — SeaweedFS needs path-style, and a bare
+`aws configure set default.s3.addressing_style path` is enough):
+
+```
+aws --endpoint-url http://seaweedfs-s3-lb-spike.<tailnet>.ts.net:8333 \
+    s3 ls s3://<bucket>/<app>-<alias>/
+```
+
+Two traps worth knowing: the S3 `Service` selector is
+`app.kubernetes.io/name: seaweedfs` while the `Seaweed` CR is named `seaweed`,
+so a guessed selector silently yields an empty `EndpointSlice` and a connection
+timeout rather than an error; and the credentials must be read straight into the
+command's environment rather than printed.
