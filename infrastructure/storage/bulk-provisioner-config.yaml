@@ -1,0 +1,45 @@
+# The provisioner reads config.json, setup, teardown and helperPod.yaml from
+# this ConfigMap. setup/teardown/helperPod are verbatim copies of what k3s ships
+# for its own instance — no reason to diverge, and keeping them identical means
+# the two provisioners behave the same way apart from where they write.
+#
+# The path below is created (and its mount asserted) by the `bulk_storage`
+# Ansible role. If /mnt/storage were ever unmounted, this provisioner would
+# happily write volumes onto the SSD's mountpoint directory instead — which is
+# exactly what that role's assert exists to prevent.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: local-path-bulk-config
+  namespace: storage-bulk
+data:
+  config.json: |-
+    {
+      "nodePathMap": [
+        {
+          "node": "DEFAULT_PATH_FOR_NON_LISTED_NODES",
+          "paths": ["/mnt/storage/k8s-volumes"]
+        }
+      ]
+    }
+  setup: |-
+    #!/bin/sh
+    set -eu
+    mkdir -m 0777 -p "${VOL_DIR}"
+    chmod 700 "${VOL_DIR}/.."
+  teardown: |-
+    #!/bin/sh
+    set -eu
+    rm -rf "${VOL_DIR}"
+  # Pinned to the image k3s v1.36.2+k3s1 uses for its own helper pod,
+  # verified 2026-08-11.
+  helperPod.yaml: |-
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: helper-pod
+    spec:
+      containers:
+        - name: helper-pod
+          image: "rancher/mirrored-library-busybox:1.37.0"
+          imagePullPolicy: IfNotPresent

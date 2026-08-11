@@ -1,0 +1,22 @@
+---
+# Everything below writes into {{ bulk_storage_mount }}. If the disk is NOT
+# mounted there, those paths are just empty directories on the root filesystem —
+# so a bulk PVC would "provision" successfully while quietly filling the very
+# SSD this tier exists to drain. Fail loudly instead of silently doing the
+# opposite of the intent.
+- name: Assert the bulk disk is actually mounted
+  ansible.builtin.assert:
+    that:
+      - ansible_mounts | selectattr('mount', 'equalto', bulk_storage_mount) | list | length > 0
+    fail_msg: >-
+      {{ bulk_storage_mount }} is not a mount point. Refusing to write to it —
+      check /etc/fstab and `findmnt {{ bulk_storage_mount }}` before re-running.
+    success_msg: "{{ bulk_storage_mount }} is mounted"
+
+- name: Create the local-path-bulk volume root
+  ansible.builtin.file:
+    path: "{{ bulk_storage_k8s_volumes }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"

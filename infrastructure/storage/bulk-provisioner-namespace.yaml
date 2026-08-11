@@ -1,0 +1,10 @@
+# Own namespace rather than kube-system: the cluster's *other* local-path
+# provisioner (serving `local-path` and `local-path-retain` off the SSD) is a
+# k3s packaged addon living in kube-system, owned by the `local-storage` Addon
+# object and re-applied by k3s on every restart. Keeping this second instance
+# entirely out of that namespace means Flux and k3s can never end up fighting
+# over an object with a colliding name.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: storage-bulk

@@ -16,6 +16,11 @@
   roles:
     - role: host_prereqs
       tags: [host_prereqs]
+    # Ahead of k3s_server: the local-path-bulk StorageClass provisions into a
+    # directory this role creates, and the assert here is the guard against
+    # writing bulk data onto the SSD when the disk isn't mounted.
+    - role: bulk_storage
+      tags: [bulk_storage]
     - role: cli_tools
       tags: [cli_tools]
     - role: k3s_server

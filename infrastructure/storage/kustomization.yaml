@@ -2,3 +2,10 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - storageclass-local-path-retain.yaml
+  # The bulk tier: a second local-path-provisioner instance writing to the
+  # spinning disk, plus the StorageClass that routes to it.
+  - bulk-provisioner-namespace.yaml
+  - bulk-provisioner-rbac.yaml
+  - bulk-provisioner-config.yaml
+  - bulk-provisioner-deployment.yaml
+  - storageclass-local-path-bulk.yaml
