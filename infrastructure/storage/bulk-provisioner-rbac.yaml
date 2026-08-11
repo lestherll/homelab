@@ -1,0 +1,43 @@
+# Deliberately a faithful copy of the privilege set k3s grants its own
+# local-path-provisioner, rather than a hand-tightened variant. The provisioner
+# drives a helper pod to mkdir/rm on the node, and the exact verb set it needs
+# across pods/pods-log/endpoints is an upstream implementation detail that has
+# changed between releases — a tighter guess here fails at provision time, in a
+# path that only runs when a new PVC is created. This grants no privilege that
+# the identical addon in kube-system doesn't already hold.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: local-path-bulk
+  namespace: storage-bulk
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: local-path-bulk
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "persistentvolumeclaims", "configmaps", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["endpoints", "persistentvolumes", "pods"]
+    verbs: ["*"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: local-path-bulk
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: local-path-bulk
+subjects:
+  - kind: ServiceAccount
+    name: local-path-bulk
+    namespace: storage-bulk

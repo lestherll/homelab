@@ -1,0 +1,13 @@
+---
+# /mnt/storage is a 931G 5400rpm spinning disk (ST1000LM035), mounted by UUID
+# from /etc/fstab. Root is a 128G SSD. That asymmetry is the whole point of this
+# role: it owns the layout of the big-but-slow disk, and only bulk, sequentially
+# accessed data belongs on it. Latency-sensitive state (Postgres WAL, Prometheus
+# TSDB) deliberately stays on the SSD — see docs/storage-tiering-notes.md.
+bulk_storage_mount: /mnt/storage
+
+# Backing directory for the `local-path-bulk` StorageClass, served by the second
+# local-path-provisioner instance in infrastructure/storage/. Mode 0700 matches
+# what the provisioner's own setup script chmods the volume parent to, so the
+# first provision doesn't show up as a spurious change.
+bulk_storage_k8s_volumes: "{{ bulk_storage_mount }}/k8s-volumes"

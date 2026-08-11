@@ -1,0 +1,23 @@
+# The "bulk" tier: backed by the 931G 5400rpm disk at /mnt/storage rather than
+# the 128G SSD the other two classes use.
+#
+# Use this for data that is large, grows over time, and is read/written mostly
+# sequentially — object storage volumes being the motivating case. Do NOT use it
+# for anything latency-bound: Postgres WAL fsyncs and Prometheus TSDB
+# compactions both behave badly on a 5400rpm laptop drive, and both are small
+# enough that the SSD is the right home. See docs/storage-tiering-notes.md.
+#
+# `provisioner` matches --provisioner-name on the storage-bulk Deployment; that
+# string is the only thing routing claims to the HDD-backed instance instead of
+# k3s's SSD-backed one.
+#
+# Retain, for the same reason as local-path-retain: D4 classifies object storage
+# as Durable, so a deleted PVC should orphan its data for manual cleanup rather
+# than destroy it immediately.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-path-bulk
+provisioner: homelab.local/local-path-bulk
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
