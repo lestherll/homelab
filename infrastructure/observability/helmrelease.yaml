@@ -21,6 +21,13 @@ spec:
         # Deliberate reduction from the current podman stack's 30d, to fit
         # D7's ~20%/~3GB budget with headroom for Loki's later addition.
         retention: 15d
+        # retention (time) alone does not bound disk use, and the 10Gi below is
+        # decorative: local-path provisions a plain hostPath directory with no
+        # quota, so `df` inside the pod reports the whole root filesystem. Left
+        # unbounded, a cardinality spike fills the SSD and takes the cluster
+        # with it rather than dropping the oldest blocks. Set below the claim so
+        # Prometheus compacts against its own limit first.
+        retentionSize: 8GiB
         resources:
           requests: { cpu: 200m, memory: 480Mi }
           limits: { cpu: 500m, memory: 1400Mi }
