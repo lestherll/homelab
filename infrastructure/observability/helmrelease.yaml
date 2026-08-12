@@ -60,6 +60,15 @@ spec:
       sidecar:
         dashboards:
           enabled: true
+        # The two sidecars ship with no requests or limits at all, so they were
+        # invisible to D7's ~3GB observability budget while actually holding
+        # ~154Mi between them (sc-dashboard 78Mi, sc-datasources 76Mi, measured
+        # 2026-08-12). Sized at ~1.6x observed. They are ConfigMap watchers —
+        # steady-state RSS, no growth path — so this is about making the budget
+        # sum honest, not about constraining them.
+        resources:
+          requests: { cpu: 5m, memory: 64Mi }
+          limits: { cpu: 50m, memory: 128Mi }
       # Without this, /var/lib/grafana (dashboards, users, prefs) is an emptyDir
       # — wiped on every pod restart/reschedule. type: pvc matches this chart's
       # default single-replica Deployment mode (the chart's own commented
@@ -109,3 +118,33 @@ spec:
       resources:
         requests: { cpu: 50m, memory: 128Mi }
         limits: { cpu: 200m, memory: 256Mi }
+
+    kubelet:
+      serviceMonitor:
+        # k3s runs the apiserver, controller-manager, scheduler and kubelet in
+        # ONE process sharing one Prometheus registry, so the kubelet's
+        # :10250/metrics endpoint serves that whole registry — including every
+        # apiserver_* and etcd_* metric. They are therefore stored twice: once
+        # under job="apiserver", and again under job="kubelet".
+        #
+        # Measured 2026-08-12 before this drop: 148,366 series total, of which
+        # job="kubelet" was 79,694 — and only 4,906 of those were genuine
+        # kubelet/container metrics. The other ~69,000 (47% of the entire TSDB)
+        # were duplicated apiserver/etcd series. A kubelet exposing
+        # etcd_request_duration_seconds_bucket is the tell; it has no etcd
+        # client. This is a k3s artifact, not a kube-prometheus-stack default —
+        # the chart's own drops for this endpoint assume a standalone kubelet.
+        #
+        # Dropping them loses no information: the same series remain under
+        # job="apiserver", which is what every default rule and dashboard
+        # queries. workqueue_* is deliberately NOT dropped — a kubelet has real
+        # workqueues of its own, and at ~2k series it isn't worth the ambiguity.
+        metricRelabelings:
+          # Chart default for this endpoint, preserved — setting this key
+          # replaces the list rather than appending to it.
+          - action: drop
+            sourceLabels: [__name__, le]
+            regex: (csi_operations|storage_operation_duration)_seconds_bucket;(0.25|2.5|15|25|120|600)(\.0)?
+          - action: drop
+            sourceLabels: [__name__]
+            regex: (apiserver|etcd)_.*
