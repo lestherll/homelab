@@ -8,3 +8,4 @@ resources:
   - helmrepository-cloudnative-pg.yaml
   - helmrepository-kro.yaml
   - helmrepository-seaweedfs-operator.yaml
+  - helmrepository-victoria-metrics.yaml
