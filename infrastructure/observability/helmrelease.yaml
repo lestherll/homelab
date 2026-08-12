@@ -28,9 +28,22 @@ spec:
         # with it rather than dropping the oldest blocks. Set below the claim so
         # Prometheus compacts against its own limit first.
         retentionSize: 8GiB
+        # Re-sized 2026-08-12, after the kubelet cardinality drop halved active
+        # series (155,621 -> 80,475). Memory tracks head series, so the old
+        # 1400Mi was sized against a TSDB that no longer exists: observed
+        # ceiling is now 607Mi (max over 2h, post-compaction — the 761Mi max
+        # over 8h spans the pre-compaction head and isn't representative).
+        # 1024Mi is ~1.7x that.
+        #
+        # CPU limit raised despite usage *falling* to 59m: average is
+        # misleading here because the work is bursty (scrape, rule eval,
+        # compaction), and at 500m the container was throttled in 17.4% of its
+        # CFS periods. Throttling a bursty workload stretches wall-clock time
+        # without showing up as high average usage — the same trap as
+        # node-exporter below, just less severe.
         resources:
-          requests: { cpu: 200m, memory: 480Mi }
-          limits: { cpu: 500m, memory: 1400Mi }
+          requests: { cpu: 200m, memory: 512Mi }
+          limits: { cpu: 750m, memory: 1024Mi }
         storageSpec:
           volumeClaimTemplate:
             spec:
@@ -62,13 +75,19 @@ spec:
           enabled: true
         # The two sidecars ship with no requests or limits at all, so they were
         # invisible to D7's ~3GB observability budget while actually holding
-        # ~154Mi between them (sc-dashboard 78Mi, sc-datasources 76Mi, measured
-        # 2026-08-12). Sized at ~1.6x observed. They are ConfigMap watchers —
-        # steady-state RSS, no growth path — so this is about making the budget
-        # sum honest, not about constraining them.
+        # ~154Mi between them. They are ConfigMap watchers — steady-state RSS,
+        # no growth path — so bounding them is about making the budget sum
+        # honest, not about constraining them.
+        #
+        # Corrected 2026-08-12: the first attempt sized these off a single spot
+        # reading (78Mi/76Mi) taken minutes after a restart, which undershot.
+        # Real ceilings over 8h are 95Mi and 93Mi — 74% and 72% of the 128Mi
+        # first set — and sc-dashboard was throttled in 54.5% of its CFS
+        # periods against the 50m CPU limit. Sizing a just-restarted process is
+        # how you get this wrong; use max_over_time, not `kubectl top`.
         resources:
-          requests: { cpu: 5m, memory: 64Mi }
-          limits: { cpu: 50m, memory: 128Mi }
+          requests: { cpu: 10m, memory: 96Mi }
+          limits: { cpu: 200m, memory: 192Mi }
       # Without this, /var/lib/grafana (dashboards, users, prefs) is an emptyDir
       # — wiped on every pod restart/reschedule. type: pvc matches this chart's
       # default single-replica Deployment mode (the chart's own commented
@@ -110,9 +129,30 @@ spec:
       # rule, not here.
       hostNetwork: true
       hostPID: true
+      # CPU limit raised 50m -> 500m, 2026-08-12. The 50m above was the chart's
+      # default, adopted here "for documentation" without ever being measured
+      # against this host — and this host has ~20 network interfaces (veths,
+      # cni0, flannel.1, tailscale0) for the netclass collector to walk.
+      #
+      # At 50m the container got a 5% duty cycle and was throttled in 85.5% of
+      # its CFS periods. A ~194ms scrape (3.87s wall x 0.05 duty) stretched to
+      # ~4s, occasionally past the 10s global scrape_timeout — which is what
+      # the 10.009s max scrape duration and the 98.75% 24h availability
+      # actually were: failed scrapes, not a slow exporter. The liveness probe
+      # (timeoutSeconds: 1, against the *static* / page) landed inside those
+      # throttled windows and couldn't get enough CPU to answer, producing the
+      # recurring Unhealthy events and eventual SIGTERM restarts.
+      #
+      # Diagnosis note for next time: every collector reporting a near-
+      # identical ~4s was the tell. One slow collector looks like one outlier;
+      # uniform slowness across all of them is a shared constraint, i.e. the
+      # cgroup. Average CPU (6.7m) looks harmless and hides this completely.
+      #
+      # 500m lets the same 194ms of work finish in ~390ms, inside both the 1s
+      # probe timeout and the 10s scrape timeout, and is 6% of this 8-core box.
       resources:
         requests: { cpu: 10m, memory: 16Mi }
-        limits: { cpu: 50m, memory: 32Mi }
+        limits: { cpu: 500m, memory: 32Mi }
 
     prometheusOperator:
       resources:
@@ -121,6 +161,21 @@ spec:
 
     kubelet:
       serviceMonitor:
+        # 10s is the chart's default, chosen to match the kubelet's own cAdvisor
+        # housekeeping interval so no update is missed. Dropped to 30s to match
+        # every other target here: at 10s this endpoint was 13% of total ingest
+        # (359 of 2,783 samples/sec) off only 3,593 samples per scrape — cost
+        # driven purely by frequency, not by how much it returns.
+        #
+        # The tradeoff is real but narrow. Counters (container CPU, network
+        # bytes) lose nothing: rate() over a window is exact regardless of how
+        # often a monotonic counter is sampled. What degrades is gauges —
+        # container_memory_working_set_bytes is now observed 1-in-3 as often,
+        # so brief memory spikes can pass unseen. That matters here more than
+        # it looks: this repo has twice used container memory metrics to
+        # diagnose Grafana OOMKills. If a future OOM investigation comes up
+        # short on resolution, this is the line to revisit.
+        cAdvisorInterval: 30s
         # k3s runs the apiserver, controller-manager, scheduler and kubelet in
         # ONE process sharing one Prometheus registry, so the kubelet's
         # :10250/metrics endpoint serves that whole registry — including every
