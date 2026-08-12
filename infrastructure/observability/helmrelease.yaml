@@ -95,10 +95,12 @@ spec:
       # the 15d Prometheus window — i.e. every meaningful energy-cost panel —
       # must select this one; short-range/live panels can use either.
       #
-      # Declared here rather than via sidecar.datasources, which is NOT enabled
-      # on this release (only sidecar.dashboards is). Turning the datasource
-      # sidecar on for one static, git-managed datasource would add a watcher
-      # process and a labelled ConfigMap to achieve exactly this.
+      # additionalDataSources is the chart's own hook for this: it renders into
+      # the kube-prometheus-stack-grafana-datasource ConfigMap, which the
+      # datasource sidecar then provisions into Grafana. That sidecar is enabled
+      # by chart default (as is the dashboards one, which is set explicitly
+      # below) — so nothing extra needs turning on, and unlike dashboards this
+      # needs no labelled ConfigMap of its own under dashboards/.
       additionalDataSources:
         - name: VictoriaMetrics
           uid: vm-longterm
