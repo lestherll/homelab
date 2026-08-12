@@ -1,0 +1,358 @@
+{
+  "uid": "homelab-power",
+  "title": "Power & Energy Cost",
+  "tags": ["power", "energy", "homelab"],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "version": 1,
+  "editable": true,
+  "refresh": "1m",
+  "time": { "from": "now-24h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Data source",
+        "description": "VictoriaMetrics holds the full history. Prometheus only keeps 15d, so any range beyond that must use VictoriaMetrics.",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": { "text": "VictoriaMetrics", "value": "vm-longterm" },
+        "hide": 0,
+        "refresh": 1
+      },
+      {
+        "name": "tariff",
+        "label": "Tariff (£/kWh)",
+        "description": "Your electricity unit rate. Default 0.26 is a rough UK average, not your actual tariff — set it.",
+        "type": "textbox",
+        "query": "0.26",
+        "current": { "text": "0.26", "value": "0.26" },
+        "hide": 0
+      },
+      {
+        "name": "baseline_w",
+        "label": "Assumed non-CPU baseline (W)",
+        "description": "Everything RAPL cannot see: panel, both disks, fans, chipset, WiFi, PSU conversion loss. This is an ASSUMPTION, not a measurement. Replace with metered wall power when a smart plug exists.",
+        "type": "textbox",
+        "query": "10",
+        "current": { "text": "10", "value": "10" },
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "What this dashboard does and does not measure",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "The **Measured** row is real: Intel RAPL counters for the CPU package and DRAM.\n\nThe **Estimated** row is *not* metered wall power. RAPL cannot see the display panel, either disk, fans, chipset, WiFi, or the charger's AC/DC conversion loss — on this Inspiron 5770 that is most of the actual draw. Those panels add the `baseline_w` variable to the measured CPU figure to approximate whole-system power. **The cost numbers are only as good as that assumption.** For true cost, meter the wall socket and repoint these panels at it."
+      }
+    },
+    {
+      "id": 2,
+      "type": "row",
+      "title": "Measured — CPU package (Intel RAPL)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 4 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "CPU package power",
+      "description": "Live CPU package draw, averaged over 5m. This is measured, not estimated.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 5 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "rate(node_rapl_package_joules_total[5m])",
+          "legendFormat": "package",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt",
+          "decimals": 2,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 10 },
+              { "color": "orange", "value": 20 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "CPU energy over range",
+      "description": "increase() of the package joules counter across the dashboard time range, converted to kWh. Counter wraps at max_energy_range_uj are handled by increase().",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 5 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "increase(node_rapl_package_joules_total[$__range]) / 3.6e6",
+          "legendFormat": "CPU energy",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "kwatth",
+          "decimals": 3,
+          "color": { "mode": "fixed", "fixedColor": "blue" }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Power by RAPL zone",
+      "description": "core, uncore and dram are components INSIDE package — do not sum them with it, that double-counts. psys is deliberately omitted: it reports ~0.08 W against a ~2.5 W package on this chip, i.e. it is non-functional here rather than a whole-SoC superset.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 5, "w": 12, "x": 12, "y": 5 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "rate(node_rapl_package_joules_total[5m])",
+          "legendFormat": "package (total)"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "rate(node_rapl_core_joules_total[5m])",
+          "legendFormat": "core (within package)"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "rate(node_rapl_uncore_joules_total[5m])",
+          "legendFormat": "uncore (within package)"
+        },
+        {
+          "refId": "D",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "rate(node_rapl_dram_joules_total[5m])",
+          "legendFormat": "dram"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "type": "row",
+      "title": "Estimated — whole system and cost (uses assumed baseline)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 10 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Estimated total power",
+      "description": "Measured CPU package power plus the assumed non-CPU baseline. Estimate, not metered.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 11 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "rate(node_rapl_package_joules_total[5m]) + $baseline_w",
+          "legendFormat": "est. total",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt",
+          "decimals": 1,
+          "color": { "mode": "fixed", "fixedColor": "purple" }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Estimated energy over range",
+      "description": "(measured CPU joules + baseline watts x range seconds) converted to kWh.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 11 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "(increase(node_rapl_package_joules_total[$__range]) + $baseline_w * $__range_s) / 3.6e6",
+          "legendFormat": "est. energy",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "kwatth",
+          "decimals": 3,
+          "color": { "mode": "fixed", "fixedColor": "purple" }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Estimated cost over range",
+      "description": "Estimated energy over the selected range x the tariff variable. Only as accurate as the assumed baseline.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 11 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "((increase(node_rapl_package_joules_total[$__range]) + $baseline_w * $__range_s) / 3.6e6) * $tariff",
+          "legendFormat": "est. cost",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyGBP",
+          "decimals": 2,
+          "color": { "mode": "fixed", "fixedColor": "orange" }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Estimated cost per month",
+      "description": "Projection, not a measurement: average power across the selected range, extrapolated to 730h. A short or unrepresentative range gives a misleading monthly figure — select at least 24h.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 11 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "((increase(node_rapl_package_joules_total[$__range]) / $__range_s) + $baseline_w) * 0.730 * $tariff",
+          "legendFormat": "est. £/month",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyGBP",
+          "decimals": 2,
+          "color": { "mode": "fixed", "fixedColor": "orange" }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Estimated total power over time",
+      "description": "Measured CPU package power plus the flat assumed baseline. The shape is real; the offset is assumed.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "rate(node_rapl_package_joules_total[5m]) + $baseline_w",
+          "legendFormat": "estimated total"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "rate(node_rapl_package_joules_total[5m])",
+          "legendFormat": "measured CPU package"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt",
+          "decimals": 2,
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

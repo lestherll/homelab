@@ -45,3 +45,22 @@ configMapGenerator:
     options:
       labels:
         grafana_dashboard: "1"
+  # power-energy.json is hand-built rather than a community import, so unlike
+  # the three above it carries no import-wizard metadata to strip and uses a
+  # real `datasource` templating variable from the start.
+  #
+  # It defaults to the VictoriaMetrics datasource, not Prometheus: Prometheus
+  # retention is 15d and every meaningful cost panel spans a billing period.
+  #
+  # The `baseline_w` variable is load-bearing and deliberately visible. RAPL
+  # measures the CPU package and DRAM only — not the panel, disks, fans,
+  # chipset or PSU losses — so the "Estimated" row adds an assumed constant to
+  # approximate whole-system draw. Swap those panels onto real metered wall
+  # power if a smart plug is ever added; do not quietly tune the constant until
+  # the number looks right.
+  - name: grafana-dashboard-power-energy
+    files:
+      - power-energy.json
+    options:
+      labels:
+        grafana_dashboard: "1"
