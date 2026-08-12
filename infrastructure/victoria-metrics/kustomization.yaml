@@ -1,0 +1,12 @@
+# No namespace.yaml here on purpose: this release targets the `observability`
+# namespace, which observability/namespace.yaml already creates. Both are in the
+# same top-level `infrastructure` Kustomization, so Flux applies them together.
+#
+# Unlike seaweedfs-runtime, this does NOT need its own Flux Kustomization: the
+# deadlock documented in docs/self-service-platform-design-notes.md comes from
+# pairing a HelmRelease with raw manifests that depend on CRDs the release
+# installs. This release ships no CRDs and nothing here depends on one.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - helmrelease.yaml

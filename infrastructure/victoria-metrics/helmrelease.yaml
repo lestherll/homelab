@@ -1,0 +1,69 @@
+# Long-term store for power/energy history (LES-84). Lives in the observability
+# namespace alongside kube-prometheus-stack rather than getting its own — it is
+# part of the same observability surface, and Grafana reaches it by service DNS.
+#
+# Why a second store exists at all: Prometheus retention is GLOBAL. One instance,
+# one TSDB, one window. There is no per-series routing, so node_rapl_* cannot be
+# given a longer retention (or a different disk) than the other ~64k series. The
+# two obvious alternatives were both rejected —
+#   - moving the Prometheus TSDB to /mnt/storage: that is a 5400rpm disk and the
+#     TSDB is the latency-bound state docs/storage-tiering-notes.md keeps on the
+#     SSD. It would degrade every metric to buy retention for five series.
+#   - raising the global retention: ~1.36GB per 4 days at 64k series puts a year
+#     of full-fidelity everything past 100GB, on a 128GB SSD.
+#
+# VictoriaMetrics single-node over a second Prometheus CR (which the operator
+# already supports, and which would add no new technology) purely on footprint:
+# ~30-50Mi idle for this series count vs ~200Mi baseline for another Prometheus.
+#
+# Re-verify chart version at bump time. Verified against the VictoriaMetrics helm
+# repo as of 2026-08-12: 0.44.0 (appVersion v1.149.0).
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: victoria-metrics
+  namespace: observability
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: victoria-metrics-single
+      version: "0.44.0"
+      sourceRef:
+        kind: HelmRepository
+        name: victoria-metrics
+        namespace: flux-system
+  values:
+    server:
+      # Without this the release name yields
+      # victoria-metrics-victoria-metrics-single-server. The service name is
+      # referenced by Prometheus's remoteWrite URL and Grafana's datasource, so
+      # it is worth keeping short and stable.
+      fullnameOverride: vm-longterm
+
+      # The whole point of this component. Chart default is 1 (month).
+      #
+      # This is the ONLY real bound on growth: local-path PVCs are plain hostPath
+      # directories with no quota, so the 2Gi claim below is documentation, not a
+      # limit (see AGENT.md). At ~10MB/year for five RAPL series that is academic,
+      # but this store is intended to also receive wall-power metrics later, so
+      # the flag is set explicitly rather than left to chance.
+      retentionPeriod: "10y"
+
+      persistentVolume:
+        # Deliberately the HDD tier. This data is archival, queried rarely, and
+        # entirely latency-tolerant — it has no business consuming SSD, even at
+        # ~10MB/year. local-path-bulk is also RECLAIMPOLICY: Retain (unlike the
+        # default class), so years of history survive an accidental PVC delete,
+        # which matters more here than for any other volume in the cluster.
+        storageClassName: local-path-bulk
+        size: 2Gi
+
+      # Starting point, not a measurement — nothing has run yet. Re-size off
+      # max_over_time across hours once data is flowing, NOT off `kubectl top`
+      # against a freshly started pod, which is exactly how the observability
+      # components got mis-sized before (see the sidecar comments in
+      # observability/helmrelease.yaml).
+      resources:
+        requests: { cpu: 10m, memory: 64Mi }
+        limits: { cpu: 200m, memory: 192Mi }

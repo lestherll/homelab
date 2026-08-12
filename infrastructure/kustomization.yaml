@@ -4,6 +4,7 @@ resources:
   - sources
   - tailscale-operator
   - observability
+  - victoria-metrics
   - fastapi-echo
   - personal-finance-dashboard
   - storage

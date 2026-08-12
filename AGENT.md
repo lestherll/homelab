@@ -12,6 +12,7 @@ This repo is the declarative source of truth for a single-user homelab platform:
   - `postgres/` — CloudNativePG operator, backing every `Database` instance.
   - `seaweedfs/` — SeaweedFS operator + HelmRelease.
   - `seaweedfs-runtime/` — the `Seaweed` cluster/`ResourceReferenceGrant`/`PodMonitor`s, deliberately its **own** Flux Kustomization (`dependsOn: [infrastructure]`) — see `docs/self-service-platform-design-notes.md`'s Implementation log for why pairing a HelmRelease with CRD-dependent raw manifests in the same Kustomization deadlocks on cold apply.
+  - `victoria-metrics/` — VictoriaMetrics single-node, the long-term store for power/energy history. Runs in the `observability` namespace and receives a **filtered** `remoteWrite` from Prometheus (`node_rapl_*` only). Exists because Prometheus retention is global — there is no per-series routing, so keeping five series for years without keeping all ~64k would be impossible in one TSDB. Its PVC is on `local-path-bulk`; see `docs/storage-tiering-notes.md`.
   - `fastapi-echo/`, `personal-finance-dashboard/` — per-app Flux pointer objects (`GitRepository`+`Kustomization`) for apps whose manifests live in their own repos.
 - `clusters/homelab/` — Flux's entrypoint Kustomizations, pointing at `infrastructure/` (and, separately, `infrastructure/seaweedfs-runtime/`).
 - `CONCEPT.md` — the full product concept doc (principles, scope, users, decisions D1–D16). Read this for *why*, not just *what*.

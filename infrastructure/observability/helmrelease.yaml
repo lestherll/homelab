@@ -52,6 +52,27 @@ spec:
               resources:
                 requests:
                   storage: 10Gi
+        # Ships power metrics to the long-term store (infrastructure/
+        # victoria-metrics), because the `retention: 15d` above is global and
+        # energy-cost tracking spans billing periods. Nothing else here changes:
+        # Prometheus remains the primary store for everything, this is a copy of
+        # a handful of series that need to outlive its window.
+        #
+        # The writeRelabelConfigs filter is NOT optional. remoteWrite's default
+        # is to ship EVERY series — without the keep rule this would put a second
+        # full copy of a ~64k-series TSDB onto a 5400rpm disk. Extend the regex
+        # when a new metric genuinely needs multi-year retention (e.g. wall-power
+        # metrics from a metering smart plug), not by relaxing it.
+        #
+        # Note node_rapl_* is CPU package + DRAM only, not whole-system power —
+        # see LES-85 before building cost panels on it.
+        remoteWrite:
+          - url: http://vm-longterm.observability.svc.cluster.local:8428/api/v1/write
+            name: vm-longterm
+            writeRelabelConfigs:
+              - sourceLabels: [__name__]
+                regex: "node_rapl_.*"
+                action: keep
 
     alertmanager:
       alertmanagerSpec:
@@ -70,6 +91,28 @@ spec:
     grafana:
       admin:
         existingSecret: grafana-admin
+      # The long-term store, as a second datasource. Panels spanning more than
+      # the 15d Prometheus window — i.e. every meaningful energy-cost panel —
+      # must select this one; short-range/live panels can use either.
+      #
+      # Declared here rather than via sidecar.datasources, which is NOT enabled
+      # on this release (only sidecar.dashboards is). Turning the datasource
+      # sidecar on for one static, git-managed datasource would add a watcher
+      # process and a labelled ConfigMap to achieve exactly this.
+      additionalDataSources:
+        - name: VictoriaMetrics
+          uid: vm-longterm
+          # VictoriaMetrics implements the Prometheus query API, so the stock
+          # Prometheus datasource type works — no plugin needed (which also
+          # matters because plugin installs would need egress at pod start).
+          type: prometheus
+          access: proxy
+          isDefault: false
+          url: http://vm-longterm.observability.svc.cluster.local:8428
+          jsonData:
+            # Matches the scrape interval these series are written at, so
+            # Grafana's auto-step doesn't request finer resolution than exists.
+            timeInterval: 30s
       sidecar:
         dashboards:
           enabled: true
