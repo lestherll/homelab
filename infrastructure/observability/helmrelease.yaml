@@ -153,6 +153,23 @@ spec:
       resources:
         requests: { cpu: 10m, memory: 16Mi }
         limits: { cpu: 500m, memory: 32Mi }
+      # Lets the rapl collector read /sys/class/powercap/intel-rapl:*/energy_uj
+      # for host power metrics. That file is 0400 root:root (the kernel's
+      # CVE-2020-8694/PLATYPUS mitigation), so as uid 65534 the collector was
+      # failing EACCES on every scrape. GID 600 is the `rapl` group created by
+      # host_prereqs, which also installs the udev rule that chgrps the counters
+      # to it — this key alone does nothing without that half.
+      #
+      # This is a supplementary group rather than fsGroup on purpose: fsGroup
+      # relabels volume ownership, which is a no-op on sysfs. Supplementary
+      # groups are what the kernel actually checks on the bind-mounted file.
+      #
+      # Deliberately NOT runAsUser: 0, which would have needed no host change at
+      # all. This DaemonSet mounts host / at /host/root, so root here means a
+      # network-listening service can read /etc/shadow, the SOPS age key and the
+      # k3s node token. The whole point is one extra group, not one extra root.
+      securityContext:
+        supplementalGroups: [600]
 
     prometheusOperator:
       resources:
