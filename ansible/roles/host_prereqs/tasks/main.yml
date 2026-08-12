@@ -16,6 +16,61 @@
   when: k3s_sysctl_file.changed
   changed_when: true
 
+# node-exporter's rapl collector reads /sys/class/powercap/intel-rapl:*/energy_uj
+# to report host power draw. That one file is 0400 root:root while everything
+# else in the zone is world-readable — it's the kernel's CVE-2020-8694 (PLATYPUS)
+# mitigation, since unprivileged RAPL reads leak a power side-channel usable to
+# infer AES keys. node-exporter runs as uid 65534, so the collector fails with
+# EACCES (node_scrape_collector_success{collector="rapl"} 0, and a ~225us scrape
+# duration: it fails immediately rather than after doing work).
+#
+# Granting read to one dedicated group is the narrow fix. The two obvious
+# alternatives are both worse here:
+#   - chmod 0444 re-exposes the side channel to every local process, which is
+#     exactly what the kernel restricted.
+#   - running node-exporter as root would work with no host change at all, but
+#     that DaemonSet mounts host / at /host/root, so uid 0 would give a
+#     network-listening service read access to /etc/shadow, the SOPS age key and
+#     the k3s node token. readOnly: true stops writes, not reads.
+# The pod side of this is securityContext.supplementalGroups in
+# infrastructure/observability/helmrelease.yaml — both halves are required.
+- name: Create the rapl group for reading powercap energy counters
+  ansible.builtin.group:
+    name: rapl
+    gid: 600
+    system: true
+
+# Scoped to energy_uj on purpose. The `chmod -R g=u` pattern most RAPL exporter
+# docs (scaphandre, kepler) reach for would also make constraint_*_power_limit_uw
+# group-WRITABLE, handing this group the ability to set CPU power caps.
+#
+# KERNEL=="intel-rapl:*" deliberately matches the subzones (intel-rapl:0:0 core,
+# :0:1 uncore, :0:2 dram) as well as the top-level package-0/psys zones: the rapl
+# collector iterates every zone and one unreadable zone fails the whole collector,
+# not just that zone. It does not match the parent "intel-rapl" device, which has
+# no energy_uj anyway. $env{DEVPATH} is used rather than %k so the rule follows the
+# real device path instead of the /sys/class symlink.
+- name: Install udev rule granting the rapl group read on RAPL energy counters
+  ansible.builtin.copy:
+    dest: /etc/udev/rules.d/70-rapl-energy.rules
+    content: |
+      SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="intel-rapl:*", RUN+="/usr/bin/chgrp rapl /sys$env{DEVPATH}/energy_uj"
+      SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="intel-rapl:*", RUN+="/usr/bin/chmod g+r /sys$env{DEVPATH}/energy_uj"
+    owner: root
+    group: root
+    mode: "0644"
+  register: rapl_udev_rule
+
+# udev only applies rules on events, so an installed rule does nothing to the
+# zones that already exist. Trigger it explicitly rather than requiring a reboot.
+- name: Reload udev rules and re-trigger the powercap subsystem
+  ansible.builtin.command: "{{ item }}"
+  loop:
+    - udevadm control --reload
+    - udevadm trigger --subsystem-match=powercap --action=change
+  when: rapl_udev_rule.changed
+  changed_when: true
+
 - name: Ensure ufw is installed
   ansible.builtin.apt:
     name: ufw
