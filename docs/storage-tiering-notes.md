@@ -42,6 +42,14 @@ images *and* the four volumes of the pre-k3s podman monitoring setup, which are
 gone for good. Ollama's 17.5G was left alone deliberately; it is out of scope for
 this repo and is now ~46% of everything on the SSD.
 
+Re-audited 2026-08-13: root still 39G/106G, so nothing had crept back. containerd
+sat at 6.3G against 2.1G of live images across 29 tags — the prune held, and the
+regrowth predicted below is slow, not immediate. Ollama remains the single
+largest consumer at 45%. Note the audit ran unprivileged (`sudo` on this host
+needs interactive auth, so `du` cannot descend into `/var/lib/rancher`); the
+root-only remainder came from kubelet's stats API instead, via
+`kubectl get --raw /api/v1/nodes/homelab/proxy/stats/summary`.
+
 Two findings worth recording separately:
 
 - **containerd's 13G is mostly garbage that will never be collected.** kubelet
@@ -180,13 +188,18 @@ filesystem's free space, so relocating a volume silently changes what
 
 ## Outstanding
 
-- **The pre-migration SeaweedFS PV is still on the SSD.**
-  `pvc-aa811e20-74b5-427f-8c39-7f97ca70518c` is `Released` with `Retain`,
-  holding the ~468K of pre-move volume data at
-  `/var/lib/rancher/k3s/storage/pvc-aa811e20-…_seaweedfs_mount0-seaweed-volume-0`.
-  Deliberately kept as the rollback until the bulk tier has proven itself over a
-  few days. Reclaiming it is `kubectl delete pv` plus a manual `rm -rf` — the
-  object and the directory are separate deletions.
+- **The pre-migration SeaweedFS PV — reclaimed 2026-08-13.**
+  `pvc-aa811e20-74b5-427f-8c39-7f97ca70518c`, the `Released`/`Retain` rollback
+  holding ~468K of pre-move volume data on the SSD, was dropped two days after
+  the move once the bulk tier had proven itself. Both deletions were needed: the
+  PV object, then the directory by hand.
+
+  The check that justified dropping it is the reusable part, and it is not "the
+  pods are `Running`" — a volume server comes up healthy against an empty store.
+  Read the master's `/dir/status` instead and confirm two numbers: `Max: 8900`,
+  which is HDD-derived and so proves the server is sized against the bulk tier
+  rather than the SSD, and 14 registered volumes, which proves the copied store
+  re-registered rather than starting fresh. Both together say the rsync landed.
 
 - **One orphaned PV — resolved 2026-08-11.** `pvc-9da4a7e4-…`
   (`fastapi-echo/fastapi-echo-db-1`) was `Released` with `Retain` and stranded.
