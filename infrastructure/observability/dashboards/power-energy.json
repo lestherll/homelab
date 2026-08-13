@@ -23,19 +23,19 @@
       {
         "name": "tariff",
         "label": "Tariff (£/kWh)",
-        "description": "Your electricity unit rate. Default 0.26 is a rough UK average, not your actual tariff — set it.",
+        "description": "Actual unit rate, 25.06p/kWh. UNIT RATE ONLY — the standing charge is deliberately excluded, so these figures are the marginal cost of running this host, not a line off the bill. Update when the tariff changes.",
         "type": "textbox",
-        "query": "0.26",
-        "current": { "text": "0.26", "value": "0.26" },
+        "query": "0.2506",
+        "current": { "text": "0.2506", "value": "0.2506" },
         "hide": 0
       },
       {
         "name": "baseline_w",
         "label": "Assumed non-CPU baseline (W)",
-        "description": "Everything RAPL cannot see: panel, both disks, fans, chipset, WiFi, PSU conversion loss. This is an ASSUMPTION, not a measurement. Replace with metered wall power when a smart plug exists.",
+        "description": "Everything RAPL cannot see: panel, both disks, fans, chipset, WiFi, PSU conversion loss. Derived from Notebookcheck's measurements of this exact model (Inspiron 17-5770 / i5-8250U / FHD): 4.08W wall at idle minimum brightness, of which ~2.9W is non-CPU, plus ~0.7W WiFi and ~1.3W for the HDD that SeaweedFS and VictoriaMetrics keep spinning. Still an inference from someone else's wall meter, not a measurement of THIS host — a metering plug would replace it outright. Raise it towards 9W if the backlight ever goes back to full.",
         "type": "textbox",
-        "query": "10",
-        "current": { "text": "10", "value": "10" },
+        "query": "5",
+        "current": { "text": "5", "value": "5" },
         "hide": 0
       },
       {
@@ -57,7 +57,7 @@
       "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
       "options": {
         "mode": "markdown",
-        "content": "The **Measured** row is real: Intel RAPL counters for the CPU package and DRAM.\n\nThe **Estimated** row is *not* metered wall power. RAPL cannot see the display panel, either disk, fans, chipset, WiFi, or the charger's AC/DC conversion loss — on this Inspiron 5770 that is most of the actual draw. Those panels add the `baseline_w` variable to the measured CPU figure to approximate whole-system power. **The cost numbers are only as good as that assumption.** For true cost, meter the wall socket and repoint these panels at it.\n\n**Gaps and outages:** every energy figure covers only the *observed* portion of the selected range — the baseline is charged per sample actually recorded, not per wall-clock second, so downtime is not silently billed. Check **Data coverage** first: below 100% means part of the window is missing and the totals are correspondingly partial. One caveat that cannot be worked around here — the RAPL counter wraps roughly every 34h at idle, so a monitoring gap longer than that loses a whole 72.8 Wh wrap and undercounts CPU energy."
+        "content": "The **Measured** row is real: Intel RAPL counters for the CPU package and DRAM.\n\nThe **Estimated** row is *not* metered wall power. RAPL cannot see the display panel, either disk, fans, chipset, WiFi, or the charger's AC/DC conversion loss — on this Inspiron 5770 that is most of the actual draw. Those panels add the `baseline_w` variable to the measured CPU figure to approximate whole-system power. **The cost numbers are only as good as that assumption.** For true cost, meter the wall socket and repoint these panels at it.\n\n`baseline_w` is not a guess pulled from the air: it is derived from Notebookcheck's wall measurements of this exact model (4.08 W idle at minimum brightness, 9.6 W at maximum), adjusted for WiFi and a permanently-spinning HDD. Expect ~7.6 W total, inside the measured 4.08–9.6 W band. Cost uses the **unit rate only** — the standing charge is out of scope, so this is the marginal cost of running the host, not a bill line.\n\n**Gaps and outages:** every energy figure covers only the *observed* portion of the selected range — the baseline is charged per sample actually recorded, not per wall-clock second, so downtime is not silently billed. Check **Data coverage** first: below 100% means part of the window is missing and the totals are correspondingly partial. One caveat that cannot be worked around here — the RAPL counter wraps roughly every 34h at idle, so a monitoring gap longer than that loses a whole 72.8 Wh wrap and undercounts CPU energy."
       }
     },
     {
