@@ -1,7 +1,7 @@
 # Message broker on the platform API — design notes
 
-**Status:** exploratory working notes, **not committed** — local only, like
-`HANDOFF.md`. Commit or delete deliberately, not by accident.
+**Status:** exploratory working notes, committed for reference. Nothing here
+is built or decided.
 **Written:** 2026-08-09, during review of the D15 PoC plan
 (`~/.claude/plans/declarative-scribbling-yeti.md`).
 **Question answered:** "what happens when this platform wants a message

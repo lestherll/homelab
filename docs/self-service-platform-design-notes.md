@@ -1,8 +1,9 @@
 # Self-service typed API PoC: Application, Database, Object Storage
 
-*Design plan for decisions D15 and D16, persisted here as design notes —
-not yet implemented. See CONCEPT.md for where these decisions eventually
-get recorded once built.*
+*Design plan and build record for decisions D15 and D16. D15 shipped and is
+closed (LES-54); D16 is still design-only (LES-55). See CONCEPT.md for where
+these decisions are recorded, and the Implementation log below for what
+actually happened building D15.*
 
 ## Context
 
