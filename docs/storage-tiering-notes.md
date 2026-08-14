@@ -186,7 +186,7 @@ filesystem's free space, so relocating a volume silently changes what
 `volumeSizeLimitMB` computes against. Worth re-reading that comment in
 `seaweed-cluster.yaml` whenever a volume moves.
 
-## Outstanding
+## Resolved, kept for the reusable lessons
 
 - **The pre-migration SeaweedFS PV — reclaimed 2026-08-13.**
   `pvc-aa811e20-74b5-427f-8c39-7f97ca70518c`, the `Released`/`Retain` rollback
@@ -207,7 +207,9 @@ filesystem's free space, so relocating a volume silently changes what
   both a `Released` PV object *and* its directory behind, and nothing ever
   reclaims either. Every `local-path-retain` and `local-path-bulk` volume will
   do this. Deleting the PV object does not delete the data.
-- **No backup target.** 870G of empty spinning disk is the natural home for the
-  off-host backup CONCEPT.md C9/S4 flags as deferred. Not designed, not built.
-  Note that an on-host backup on a second disk protects against disk failure and
-  fat-fingering, not against losing the machine.
+
+**Still open:** no backup target. 870G of empty spinning disk is the natural
+home for the off-host backup CONCEPT.md C9/S4 flags as deferred — not
+designed, not built, tracked as LES-68. Note that an on-host backup on a
+second disk protects against disk failure and fat-fingering, not against
+losing the machine.
