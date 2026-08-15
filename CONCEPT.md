@@ -442,6 +442,8 @@ Every persistent volume carries a label declaring its class. Backup policy is dr
 
 Observability data is explicitly **disposable**: dashboards and alert rules live in git, the time series don't survive a rebuild, and accepting that removes a large amount of backup machinery for data I'd rarely look back at.
 
+**Partial realisation, recorded because it diverges (2026-08-13).** Durability is currently expressed two ways at once, and the two have not been reconciled. Storage tiering encodes it in the *StorageClass* — `local-path` (Delete) for disposable state, `local-path-retain` and `local-path-bulk` (Retain) for durable state, split by access pattern rather than by component (`docs/storage-tiering-notes.md`). Separately, a `platform.homelab/durability` label is set on the volumes the SeaweedFS cluster and the `Database` RGD provision. Neither is the three-valued class label this decision describes, no unlabelled-volume alert exists, and which object is authoritative is undecided. The decision stands as written; only its realisation is partial, and the gap is tracked in Linear rather than here.
+
 ### D5 — Registry: internal or external
 
 **Decision.** External initially, on the same provider as the git host so the identity systems are shared (which materially helps D13). Local **pull-through cache from day one**.
@@ -627,4 +629,5 @@ Deliberately unresolved, and recorded so they stay that way consciously.
   - **C1** — D1's promotion rule now carries a recorded amendment for these three types (D15).
   - **C6** — object storage resolved and delivered self-service, alongside Postgres (D15).
   - `AGENT.md` repo layout updated for `kro/`, `platform-api/`, `postgres/`, `seaweedfs/`, `seaweedfs-runtime/`, and per-app pointer directories. `PR.md` removed from the repo — its findings were fixed during the Phase 0 review cycle it tracked, and it wasn't being kept current as a running log for anything after.
+- **v0.7 (2026-08-13)** — **D4** annotated with its partial realisation: a two-tier storage layout (`local-path-bulk` on the spinning disk, split by access pattern) plus a `platform.homelab/durability` label on some provisioned volumes — neither of which is yet the three-valued, alerted invariant D4 specifies. The decision is unchanged; the divergence is recorded rather than resolved. No new decision recorded for the tiering itself: `docs/storage-tiering-notes.md` and `AGENT.md` carry the mechanism, and this document stays a decision log rather than a work tracker.
 - **v0.6 (2026-08-11)** — D16 revised pre-implementation: the bound-ServiceAccount-token auth model replaced with direct GitHub OIDC federation into k3s, and a `ValidatingAdmissionPolicy` added for real per-repo isolation (previously accepted as absent). Still design-only, not built. Motivated by a broader pass to unify the platform's auth/RBAC model, still in progress — no other decisions changed yet.
