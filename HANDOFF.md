@@ -1,56 +1,58 @@
-# Handoff — Talos migration, after phases 0–3
+# Handoff — next session
 
-Working file, not repo content. Durable knowledge lives in
-`docs/talos-terraform-migration-notes.md` (design + forced-changes list) and
-`terraform/README.md` (operating manual). Delete when stale.
+Working file, not repo content. Delete when the cutover is done.
 
-## State as of 2026-08-16
+## Where things stand
 
-A single-node **Talos cluster is running** at `10.10.0.10`, built entirely by
-`terraform apply`. **k3s is still `active` and untouched** — that is the
-fallback and it must stay that way until cutover.
+- **Talos VM running** at `10.10.0.10`, node `talos-cp-01`, v1.13.8 / k8s 1.36.2.
+  Built by `terraform apply`. Cluster is **empty** — Flux has never been pointed
+  at it.
+- **k3s is still running** and still serving the four tailnet ingresses. Nothing
+  has been cut over yet.
+- **Branch `feat/talos-cutover-infra`** (local, unpushed, 7 commits ahead of
+  `main`) holds every `infrastructure/` change the new cluster needs. `main` has
+  `ansible/`, `terraform/` and `docs/`.
 
-- Talos v1.13.8 / Kubernetes v1.36.2, node `talos-cp-01`, Ready.
-- Cluster is still empty beyond its own control plane. Flux has **not** been
-  pointed at it.
-- Both data tiers mounted: `u-fast` → `/var/mnt/fast` (`/dev/vdb1`),
-  `u-bulk` → `/var/mnt/bulk` (`/dev/vdc1`), matched by disk **serial**.
+## Run these first — they need a TTY (sudo is not passwordless here)
 
-Phase 3 is **written but not run**. Everything below is manifest work validated
-by `kubectl kustomize` + `helm template` + `terraform validate`; none of it has
-reconciled against a live cluster, because none of it can until cutover.
+**1. Stop k3s.** Takes down grafana, alertmanager, fastapi-echo and
+personal-finance-dashboard. Data on disk is untouched and this is reversible
+with `systemctl start k3s`.
 
-## Branch state
-
-**PRs #37–#40 are merged to `main`** (via #42), so `ansible/`, `terraform/`,
-`docs/` and `AGENT.md` are all on the trunk. `terraform/` is live on main;
-the cutover is not.
-
-Worth knowing how that went, because the same shape will recur: the stack was
-merged bottom-up but its base branch had *already* merged to main and was not
-deleted, so GitHub never retargeted, and all four PRs landed on
-`docs/reclaim-seaweedfs-rollback-pv` instead of the trunk. It looked merged and
-was not. #42 was the follow-up that actually reached main. If you stack again,
-check `git log origin/main..<branch>` rather than the PR list.
-
-**`feat/talos-cutover-infra` is the only branch left**, rebased onto main:
-
-```
-main
- └─ feat/talos-cutover-infra   infrastructure/, terraform/, docs/, CONCEPT.md
+```bash
+sudo systemctl stop k3s && sudo systemctl disable k3s
 ```
 
-It **must not merge until cutover day** — it repoints the live bulk tier at
-guest-only paths, installs a second metrics-server APIService, and breaks
-`Application.persistence`. That is the whole reason it is a separate branch.
+**2. Give the VM the machine.** Only after step 1 — the host has 15Gi and the
+VM now asks for 12Gi. Already planned: **0 to add, 2 to change, 0 to destroy**
+(domain resize in place, plus the `rotate-server-certificates` machine-config
+patch). No rebuild, data disks untouched.
 
-`feat/talos-terraform-migration` is the original unsplit branch and is now
-redundant — safe to delete.
+```bash
+cd terraform/clusters/homelab
+export TF_VAR_machine_secrets="$(sops --decrypt --output-type json machine-secrets.sops.json)"
+sg libvirt -c "terraform apply"
+```
 
-## Getting access (the scratchpad copies are gone)
+The domain needs a power cycle to actually take the new memory. Confirm with
+`sg libvirt -c "virsh dominfo homelab"` and check the node returns:
 
-Group membership needs a fresh login; until then prefix libvirt commands with
-`sg libvirt -c "..."`.
+```bash
+talosctl --talosconfig /tmp/talos/talosconfig -n 10.10.0.10 -e 10.10.0.10 health
+```
+
+**3. Converge the host** (idempotency is still unconfirmed; this also installs
+kubectl, which the host loses when k3s goes):
+
+```bash
+sudo ansible-playbook -i ansible/inventory/hosts.ini \
+  ansible/playbooks/converge.yml --tags host_prereqs,bulk_storage,cli_tools
+```
+
+Expect `changed=0` on a second run. Not `heartbeat_watchdog` — it hard-fails
+until a real `ntfy_topic` replaces the placeholder in `hosts.ini`.
+
+## Getting access
 
 ```bash
 sops --decrypt terraform/clusters/homelab/talos-secrets.sops.yaml > /tmp/ts.yaml
@@ -58,99 +60,55 @@ mkdir -p /tmp/talos && (cd /tmp/talos && talosctl gen config homelab https://10.
 talosctl --talosconfig /tmp/talos/talosconfig -n 10.10.0.10 -e 10.10.0.10 kubeconfig /tmp/kubeconfig
 ```
 
-Terraform needs the PKI in the *other* format:
+Group membership needs a fresh login; until then prefix libvirt commands with
+`sg libvirt -c "..."`.
 
-```bash
-cd terraform/clusters/homelab
-export TF_VAR_machine_secrets="$(sops --decrypt --output-type json machine-secrets.sops.json)"
-```
+## Then: LES-96, the cutover
 
-`kubectl` against **k3s** needs `KUBECONFIG=~/.kube/config` explicitly — the
-default picks up `/etc/rancher/k3s/k3s.yaml`, which is `0600 root`.
+The runbook in `docs/talos-terraform-migration-notes.md` is **written for the
+rejected bare-metal alternative** and must not be followed as-is. It says to
+re-image the host, calls "does Talos mount a populated ext4 disk without
+reformatting" the biggest unknown (moot — data moves by dump/restore into new
+virtual disks), tells you to verify RAPL (which cannot work in a guest), and
+says to delete `bulk_storage` (still needed for the HDD pool). **Write the
+VM-shaped runbook first.** Roughly:
 
-## What Phase 3 built (branch `feat/talos-cutover-infra`)
+1. Dump and verify: `pg_dump` every CNPG database, `aws s3 sync` every bucket
+   out over the tailnet. These dumps are the only safety net — there is no
+   second machine.
+2. Merge `feat/talos-cutover-infra` to `main`. It cannot land before this point:
+   it repoints storage at guest-only paths and breaks `Application.persistence`.
+3. Bootstrap Flux against the Talos cluster. Terraform deliberately stops at an
+   empty cluster.
+4. Restore: instances re-create empty → `pg_restore` → `s3 sync` back.
+5. Verify all four ingresses serve TLS. Expect ~4 fresh Let's Encrypt
+   issuances; prune the stale `ts-*` devices in the tailnet admin console.
 
-**LES-94 — storage.** Three provisioner instances in one `storage` namespace,
-classes renamed to state the guarantee, **no default class**:
+## Blocking or adjacent
 
-| Class | Provisioner | Path | Reclaim |
-|---|---|---|---|
-| `scratch` | `homelab.local/scratch` | `/var/lib/local-path-provisioner` (system disk) | Delete |
-| `fast` | `homelab.local/fast` | `/var/mnt/fast` (20 GiB) | Retain |
-| `bulk` | `homelab.local/bulk` | `/var/mnt/bulk` (100 GiB) | Retain |
-
-Consumers repointed: CNPG and the SeaweedFS filer → `fast`; SeaweedFS volume
-data and VictoriaMetrics → `bulk`; Alertmanager and Grafana → `scratch`.
-
-**Prometheus went to `fast`, not the mechanical `scratch`** — an 8GiB
-`retentionSize` does not belong on a 20 GiB system disk shared with etcd and
-containerd layers, and a fixed-size volume bounds a cardinality spike that the
-old unbounded hostPath could not. This was a judgement call, not the rename
-table; revisit it if the `fast` tier gets crowded.
-
-**LES-95 — metrics-server.** Plus two prerequisites the issue did not list:
-`rotate-server-certificates` on the kubelet (a **Terraform** change) and a
-vendored `kubelet-serving-cert-approver` v0.11.0. A Talos kubelet self-signs;
-without both halves the scrape fails x509 and `kubectl top` just says "metrics
-not available".
-
-**Observability cleanup.** k3s `(apiserver|etcd)_.*` drop removed;
-etcd/controller-manager/scheduler monitors disabled; `hostNetwork` reconsidered
-and deliberately kept.
-
-**`Application.persistence` → PVC.** `hostPath` replaced by `size`/`tier`.
-First breaking change to the platform API.
-
-## Next task: LES-96, the cutover
-
-Prerequisites are now written. What remains before the cutover runbook in
-`docs/talos-terraform-migration-notes.md` can be followed:
-
-- **The watchdog** (forced change #5) — CronJob + SOPS secret replacing the
-  systemd timer. The only forced change still unbuilt that is not deferred.
-- **Land the PR stack.** All five, in order.
-- **Dump and verify** Postgres + bucket data. The runbook is explicit that the
-  verified dumps *are* the safety net, since there is no second machine.
-
-## Outstanding smaller items
-
-- **Ansible idempotency re-run not done.** The pool-autostart fix landed after
-  the pools were created by hand, so `changed=0` is unconfirmed and pools will
-  not autostart across a host reboot until this runs:
-  `sudo ansible-playbook -i ansible/inventory/hosts.ini ansible/playbooks/converge.yml --tags host_prereqs,bulk_storage,cli_tools`
-  (needs a TTY — sudo is not passwordless here.)
-- **Domain autostart declared but unproven** — needs a host reboot.
-- **Tailscale operator behind NAT unverified** (LES-89) — check at cutover.
-- **LES-102** — sparse images can overcommit the host disk with no warning.
-- **LES-97** — node-exporter relocation, deferred by decision; power metrics
-  will be dark after cutover, which is accepted, not a bug to chase. The
-  `supplementalGroups: [600]` key is kept in the HelmRelease for its return —
-  do not "clean it up".
+- **LES-68 — no backups exist.** The runbook leans on verified dumps as the
+  safety net, which is exactly what this issue says does not exist. Worth
+  closing properly rather than hand-dumping once.
+- **LES-98 — the watchdog.** The last forced change still unbuilt. It proves
+  the host is alive, which after cutover says little about the VM.
 - **personal-finance-dashboard's own repo** must drop `persistence.hostPath`
-  or its `Application` stops reconciling after cutover. Its host-side CLI dies
-  with it, as planned.
-- **Re-measure Prometheus after cutover.** Both `retention: 15d` and
-  `retentionSize: 8GiB` were sized against a k3s TSDB whose series count was
-  dominated by the duplication that no longer happens.
+  or its `Application` will not reconcile. Its host-side CLI dies with it.
+- **LES-97** — power dashboards go dark; accepted, not a bug to chase.
+- **LES-99 / LES-101 / LES-100 / LES-102** — post-cutover tidy-up, decision
+  record, cold-apply test, sparse-image overcommit alert.
 
-## Traps that cost time — do not rediscover
+## Traps — do not rediscover
 
 - **The VM subnet must miss the Kubernetes service CIDR.** `10.100.0.0/24` sits
   inside `10.96.0.0/12`. Symptom is etcd stuck on "Waiting for etcd spec" with
-  no stated cause; the reason appears only in
-  `talosctl dmesg | grep diagnostic`. Now `10.10.0.0/24`.
-- **libvirt provider 0.9.x uses nested attributes, not blocks.** Every 0.8.x
-  example fails to parse.
-- **`machine.certSANs` omission fails as a hang, not an error** — the bootstrap
-  resource retries a condition that can never clear.
-- **Talos enforces PodSecurity `baseline`**, which forbids `hostPath` outright.
-  This bites the storage provisioners, whose helper pods bind-mount the node
-  path — hence `enforce: privileged` on the `storage` namespace. It fails at
-  first PVC, not at deploy. Debug pods need the same treatment; see
-  `terraform/debug-pod.yaml`.
-- **`terraform destroy` refuses outright** while the data volumes exist. Rebuild
-  with `-target=module.cluster.libvirt_domain.node -target=module.cluster.libvirt_volume.system`.
-- **Never write into k3s's data paths** (`/var/lib/rancher/k3s/storage`,
-  `/mnt/storage/k8s-volumes`). Only mistake here that fails silently and
-  permanently. `bulk_storage` still creates the latter on purpose — it holds
-  k3s's bulk PV data, which is the fallback.
+  no stated cause; the reason appears only in `talosctl dmesg | grep diagnostic`.
+  Now `10.10.0.0/24`.
+- **Talos enforces PodSecurity `baseline`**, which forbids `hostPath`. The
+  storage provisioners' helper pods need it, hence `enforce: privileged` on the
+  `storage` namespace — it fails at the *first PVC*, not at deploy.
+- **`machine.certSANs` omission fails as a hang, not an error.**
+- **libvirt provider 0.9.x uses nested attributes, not blocks.**
+- **`terraform destroy` refuses** while the data volumes exist. Rebuild with
+  `-target=module.cluster.libvirt_domain.node -target=module.cluster.libvirt_volume.system`.
+- **Check `git log origin/main..<branch>`, not the PR list.** The last stack
+  merged into its own base branch and read as merged while `main` had none of it.
