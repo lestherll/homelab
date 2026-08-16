@@ -1,0 +1,10 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: metrics-server
+  namespace: flux-system
+spec:
+  interval: 1h
+  # The upstream SIG chart, not a third-party repackaging — same project that
+  # publishes the component itself.
+  url: https://kubernetes-sigs.github.io/metrics-server/

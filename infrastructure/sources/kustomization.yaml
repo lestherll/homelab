@@ -9,3 +9,4 @@ resources:
   - helmrepository-kro.yaml
   - helmrepository-seaweedfs-operator.yaml
   - helmrepository-victoria-metrics.yaml
+  - helmrepository-metrics-server.yaml

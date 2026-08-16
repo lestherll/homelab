@@ -1,0 +1,42 @@
+# metrics-server, owned by the repo because Talos ships nothing — k3s bundled
+# it, which is the only reason `kubectl top` ever worked here. It backs
+# `kubectl top`/`metrics.k8s.io`, HPAs if any ever exist, and the
+# resource-diagnose workflow.
+#
+# CANNOT MERGE WHILE k3s IS LIVE. k3s's config disables only traefik and
+# servicelb, so its bundled metrics-server already owns the cluster-wide
+# APIService `v1beta1.metrics.k8s.io`. A second install there fails helm's
+# install outright ("rendered manifests contain a resource that already
+# exists"), leaving a permanently failing HelmRelease. Merges on cutover day
+# with the storage rewrite; on Talos there is no APIService to collide with.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: metrics-server
+  namespace: metrics-server
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: metrics-server
+      # Verified against https://kubernetes-sigs.github.io/metrics-server/ as
+      # of 2026-08-16: 3.13.1 is the latest chart. Re-verify at bump time.
+      version: "3.13.1"
+      sourceRef:
+        kind: HelmRepository
+        name: metrics-server
+        namespace: flux-system
+  values:
+    # Chart-default args, deliberately. Talos signs kubelet serving certs from
+    # the cluster CA, so the default cert validation should just work and
+    # --kubelet-insecure-tls should NOT be needed. Unverified until cutover —
+    # if `kubectl top` then shows x509 errors against the kubelet, that flag is
+    # the fix, and this comment is wrong.
+    #
+    # Requests are upstream's documented floor for small clusters; usage scales
+    # with node+pod count, which a single-node homelab flattens to a constant.
+    # No memory limit: the metrics cache is in-memory, and an OOMKill
+    # mid-scrape serves a stale metrics API, which is worse than a restartless
+    # overage on a component this small.
+    resources:
+      requests: { cpu: 100m, memory: 200Mi }
