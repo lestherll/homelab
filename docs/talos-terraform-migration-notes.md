@@ -308,6 +308,24 @@ exactly one place: if `/mnt/storage` is not mounted when libvirt opens the bulk
 image, the image is created on the SSD. That is the correct home for a hardware
 assertion, and it is the only one left.
 
+### Make no StorageClass the default
+
+Today `local-path` is the cluster default because k3s made it so — the choice
+was never taken. On Talos all three classes are repo-created, so it has to be.
+
+**Set no default at all.** A PVC that names no class then stays `Pending`,
+loudly and immediately, instead of silently landing somewhere wrong. The
+alternatives are both worse: defaulting to `scratch` preserves today's footgun
+(a chart that omits `storageClassName` silently gets `Delete` storage), and
+defaulting to `fast` puts every disposable PVC on the most contended disk.
+
+The cost is one explicit `storageClassName` on each of the three observability
+PVCs, all of which are already repo-managed. The benefit lines up with D4:
+CONCEPT.md:445 records that durability classification is only partly realised
+and that no unlabelled-volume alert exists — forcing the choice at PVC creation
+is the cheapest available way to close part of that gap, and it needs no alert
+because the failure is a `Pending` volume rather than a missing label.
+
 ### The DX change that matters most: `Application.persistence`
 
 The platform API is already close to the target shape — `spec: {size: small}`
@@ -366,15 +384,34 @@ already accepted; it moves into a container or becomes an endpoint on the app.
 Reading- and experiment-led; each phase exists to answer questions, and has an
 exit criterion. Nothing before Phase 4 touches the live cluster.
 
-**Phase 0 — Read (no changes).** Work the reading list below. Exit: Q1, Q6,
-Q7, Q11 and Q16 have answers; the rest are at least scoped.
+**Phase 0 — Read, plus one experiment on the live cluster.** Work the reading
+list below. Q1 and Q7 are already answered above; Q6, Q11 and Q16 are the
+remainder.
+
+Phase 0 also gets the one experiment that needs **no Talos work at all** and
+returns the most information per hour: **stand up node-exporter on the Ubuntu
+host now, add it to the live Prometheus as a second scrape target, and find out
+which stock kube-prometheus-stack rules and dashboards go blank** (Q18). This is
+the migration's most likely source of *silent* breakage — every other major risk
+fails loudly and has a phase that catches it, whereas this one fails by a panel
+quietly showing nothing. It is testable today against k3s, it is reversible, and
+the relabelling it forces is work the migration needs regardless of whether the
+migration ever happens. Pull it forward.
+
+Exit: Q6, Q11, Q16 answered; the rest at least scoped; **Q18 quantified — a
+concrete list of the rules and dashboards that need relabelling, not an
+estimate.**
 
 **Phase 1 — Hand-built sandbox VM.** Install libvirt/KVM on the host. Boot a
 throwaway Talos VM by hand with `talosctl`, no Terraform yet. Deliberately
 manual so that failures are attributable to Talos, not to a provider.
 Exit: a single-node Talos cluster answers `kubectl get nodes`; measured idle
 memory footprint recorded; **RAPL absence in the guest confirmed empirically**
-(don't take this document's word for it); guest-agent shutdown verified.
+(don't take this document's word for it — check this first within the phase,
+since a chunk of Phase 3 gets simpler if it turns out to be wrong);
+guest-agent shutdown verified; **a libvirt-set disk `<serial>` confirmed
+visible in Talos's disk properties and matchable by CEL** (the join the whole
+storage design rests on); **virtio-balloon free-page-reporting tried** (Q27).
 
 **Phase 2 — Terraform-ise it.** Write `terraform/modules/talos-cluster/` and
 drive the same sandbox VM from it, against the pinned stack (Terraform/OpenTofu
@@ -406,13 +443,25 @@ is worth less than Alternative A** — so run it before building anything on top
 bring up `infrastructure/` for real, using **temporary tailscale hostnames**
 (Q28). Land the forced `infrastructure/` changes. Bring workloads up in
 dependency order — metrics-server, then CNPG, then SeaweedFS, then one
-`Application` — and leave **observability last**, since Prometheus is both the
-memory hog and the thing least needed mid-migration. Exit: observability green
-with host-scraped node-exporter; power dashboards live off the host exporter;
-**Q18's dashboard/alert-rule relabelling actually resolved rather than
-deferred** — this remains the most likely source of silent breakage in the
-whole migration and no later phase re-checks it; both clusters coexisting
-within 15Gi with measured headroom.
+`Application`.
+
+**Do not bring observability up on the new cluster during this phase.** It does
+not fit in 15Gi alongside k3s's (Q27), and trying is how the parallel phase
+fails. Observability comes up on the new cluster *after* cutover, which means
+accepting a window with no in-cluster metrics.
+
+That window is survivable because of a property this design already has for
+unrelated reasons: **node-exporter, the RAPL power metrics and the heartbeat
+watchdog all live on the Ubuntu host, outside both clusters.** They keep working
+straight through cutover. Host health, power and the dead-man's switch never go
+dark; only in-cluster metrics do, and only until Flux reconciles the
+observability stack on the far side. The host-side observability relocation was
+adopted to solve a measurement-correctness problem — that it also makes a blind
+cutover window safe is a reinforcing property worth relying on deliberately.
+
+Exit: data services and one `Application` healthy on the new cluster; Q18's
+relabelling landed (quantified back in Phase 0); both clusters coexisting within
+15Gi with measured headroom recorded.
 
 **Phase 4 — Cutover.** Backups first (see cost sheet), then the data move.
 Reuse Alternative A's runbook, minus the re-image step and with the old
@@ -428,6 +477,59 @@ D3 amendment).
 effectively empty. The data-preservation step that Alternative A calls its
 "single biggest technical unknown" is nearly free *right now*, and gets
 steadily more expensive as SeaweedFS and VictoriaMetrics accumulate history.
+
+## Feasibility: what could actually stop this
+
+Ranked, 2026-08-16. Note the top slot changed: it used to be storage.
+
+1. **Memory during the parallel phase.** The binding constraint. 15Gi total,
+   ~9.8Gi available, and a VM's allocation is spent rather than shared. Resolved
+   in the plan by not duplicating observability (Phase 3) and possibly softened
+   by ballooning (Q27) — but if a Talos VM running the data services turns out
+   to want meaningfully more than ~7Gi, the parallel phase is not affordable and
+   the direction collapses back toward Alternative A's riskier one-shot cutover.
+   **Phase 1's measured idle footprint is the number that decides this**, which
+   is another reason to run Phase 1 early and cheaply.
+2. **Q18, the node-exporter relabelling.** The only major risk that fails
+   silently. Now pulled forward into Phase 0 for exactly that reason.
+3. **RAPL absence in the guest.** Load-bearing for the whole observability
+   redesign and still only asserted. Cheap to verify; Phase 1.
+4. **The libvirt provider's 0.9 rewrite.** Real but bounded — pinning plus
+   Phase 2 is the mitigation, and the fallbacks in Q1 exist.
+
+**No longer a top risk:** Talos adopting the populated whole-disk-ext4
+`/dev/sda`, previously called this migration's "single biggest technical
+unknown". File-backed images removed it — the host keeps owning the physical
+filesystem and Talos only ever meets clean virtual block devices. Record the
+swap explicitly, because the phase ordering should follow the risk: the biggest
+unknown moved from storage to memory.
+
+## Remaining DX gaps (not fixed by this migration)
+
+**It is invisible to app authors, and that is the point.** An app repo's
+`deploy/` keeps its `namespace.yaml` + `Database` + `ObjectStorage` +
+`Application`, and the only field that changes — `persistence` — gets simpler.
+The OS, the provisioning tool and the storage layer underneath all get replaced
+and the consumer contract does not move. That is the strongest available
+evidence that D15's abstraction was drawn in the right place, and it belongs in
+the CONCEPT.md decision if this is executed.
+
+Two DX gaps remain that this migration does **not** address. Both predate it and
+neither should be mistaken for something it introduced:
+
+- **Onboarding is not actually self-service.** A new app still needs a commit to
+  *this* repo for its Flux pointer object under `infrastructure/<app>/`. So the
+  platform API is self-service for *resources* but not for *apps* — the first
+  step still requires platform-repo access. This is the largest remaining DX
+  ceiling. Fixing it later means either a `GitRepository` discovery pattern or
+  an app-registry kind; not scheduled.
+- **There is no local development loop**, and killing the
+  personal-finance-dashboard host CLI removes the last "run it on the box"
+  affordance. The real answer is already scoped in
+  `external-consumer-access-notes.md` — an off-platform app consuming
+  `Database`/`ObjectStorage` over the tailnet is a local dev loop wearing a
+  different hat. That raises that investigation's priority from "interesting"
+  to "the replacement for something this migration removes."
 
 ## Open questions
 
@@ -580,11 +682,18 @@ it in.
 
 ### F. Migration sequencing
 
-27. Can k3s and the Talos VM run simultaneously inside 15Gi? Current whole-host
-    usage is 5.3Gi with 9.8Gi available, so a 6–7Gi VM looks feasible — but
-    duplicated observability is the risk. Likely order: data services first,
-    observability last, since Prometheus is both the memory hog and the thing
-    least needed mid-migration.
+27. **[decisive]** Can k3s and the Talos VM run simultaneously inside 15Gi?
+    Current whole-host usage is 5.3Gi with 9.8Gi available, so a 6–7Gi VM
+    consumes essentially all remaining headroom — and VM memory is **spent, not
+    shared**. This is now the migration's binding constraint (see the
+    feasibility note below); duplicating observability across both clusters does
+    not fit. Two mitigations, which compose:
+    - **Don't duplicate observability at all** — the resolution adopted in
+      Phase 3 above.
+    - **virtio-balloon with free-page-reporting**, so the guest returns unused
+      memory to the host rather than holding its whole allocation. If Talos
+      supports it, the parallel phase stops being a knife-edge. Unverified;
+      a Phase 1 checkbox.
 28. **[decisive]** Two clusters cannot both serve
     `grafana.tailf4742d.ts.net`. Temporary hostnames during the parallel
     phase, or accept downtime at switchover — and note AGENT.md's
