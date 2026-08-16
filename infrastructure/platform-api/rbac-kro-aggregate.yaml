@@ -37,6 +37,14 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Rendered by the Application RGD's spec.persistence (revision 3), which
+  # replaced a hostPath bind-mount with a real claim. Only PVCs are granted,
+  # never persistentvolumes: the claim is the app-facing object, and the PV is
+  # the provisioner's to create. Both offered tiers are Retain, so `delete`
+  # here releases a claim without destroying the volume behind it.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
   # Rendered by the Database RGD. The PodMonitor is what closes the
   # currently-live gap where no CNPG cluster is scraped at all.
