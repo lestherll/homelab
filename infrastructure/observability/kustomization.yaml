@@ -3,6 +3,7 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - grafana-admin-secret.sops.yaml
+  - alertmanager-ntfy-secret.sops.yaml
   - helmrelease.yaml
   - grafana-ingress.yaml
   - alertmanager-ingress.yaml

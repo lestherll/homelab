@@ -87,7 +87,105 @@ spec:
                 action: keep
 
     alertmanager:
+      # Until this block existed, every alert on this cluster was discarded.
+      # The chart's default route sends everything to a receiver literally named
+      # "null", and 35 stock rule groups — node health, disk pressure, apiserver
+      # SLOs, kubelet, CNPG — plus every Application's own rules fired into it.
+      # Nothing was broken; nothing was delivered either.
+      #
+      # THE ROUTING LIVES HERE IN PLAIN TEXT ON PURPOSE. Only the ntfy URL is
+      # secret (alertmanager-ntfy-secret.sops.yaml, because a public repo plus a
+      # plaintext topic is a write credential to the operator's phone). What gets
+      # sent, what is suppressed, and how often it repeats is exactly the part
+      # worth reading in a diff, so none of it is hidden behind SOPS.
+      # NOTE this REPLACES the chart's default config wholesale rather than
+      # merging into it, so everything below that looks like boilerplate — the
+      # global block, the inhibit rules, the templates path — is carried over
+      # deliberately from the chart's default. Dropping them would silently
+      # discard the stock suppression rules, which is precisely what stops one
+      # incident from arriving as three notifications the day `warning` is
+      # promoted to a delivered severity.
+      config:
+        global:
+          resolve_timeout: 5m
+        inhibit_rules:
+          - source_matchers: ['severity = "critical"']
+            target_matchers: ['severity =~ "warning|info"']
+            equal: [namespace, alertname]
+          - source_matchers: ['severity = "warning"']
+            target_matchers: ['severity = "info"']
+            equal: [namespace, alertname]
+          - source_matchers: ['alertname = "InfoInhibitor"']
+            target_matchers: ['severity = "info"']
+            equal: [namespace]
+          - target_matchers: ['alertname = "InfoInhibitor"']
+        templates:
+          - /etc/alertmanager/config/*.tmpl
+        route:
+          # The default stays "null": silence is still the default outcome, and
+          # a severity has to be routed deliberately to escape it. Inverting
+          # this — deliver by default, silence exceptions — is how a phone ends
+          # up buzzing for a single-node etcd rule that can never be fixed, and
+          # how an operator learns to swipe alerts away unread.
+          receiver: "null"
+          group_by: [namespace, alertname]
+          group_wait: 30s
+          group_interval: 5m
+          repeat_interval: 12h
+          routes:
+            # The chart's own always-firing liveness alert. Its purpose is to
+            # prove the pipeline works to an external dead-man's-switch service;
+            # there is no such service here, so it stays discarded.
+            - matchers: ['alertname = "Watchdog"']
+              receiver: "null"
+            # Critical only, deliberately, and this is the whole delivery
+            # surface for now. Several stock groups are written for multi-node
+            # clusters (etcd quorum, scheduler and controller-manager SLOs) and
+            # will fire, be perfectly true, and be unfixable on a single node.
+            # Routing warnings today would bury the alerts that matter under
+            # them within a week. Warning gets promoted from evidence — after
+            # watching what actually fires — not from prediction.
+            - matchers: ['severity = "critical"']
+              receiver: ntfy
+        receivers:
+          - name: "null"
+          - name: ntfy
+            webhook_configs:
+              # url_file, not url. Alertmanager's assembled config lands in a
+              # Secret that anything with `get secrets` in this namespace can
+              # read; url_file keeps the topic out of it and leaves the mounted
+              # file as the single place it exists in the cluster.
+              - url_file: /etc/alertmanager/secrets/alertmanager-ntfy/url
+                # Recovery notices too. An alert that never says "resolved"
+                # trains you to go and check by hand every time, which costs
+                # more attention than the alert saved.
+                send_resolved: true
+                http_config:
+                  http_headers:
+                    # ntfy reads these; the POST body becomes the message text.
+                    #
+                    # KNOWN ROUGH EDGE, named rather than discovered later: the
+                    # body is Alertmanager's own JSON and its webhook receiver
+                    # has no body template, so the notification arrives as a
+                    # JSON blob under a fixed title. It carries the alertname
+                    # and summary, so it is legible, but it is not pretty.
+                    # Prettifying it means a translator sitting between the two
+                    # — a real component to run and pin — which is not worth
+                    # delaying delivery for. Revisit if the volume ever makes
+                    # the raw form genuinely unreadable.
+                    Title:
+                      values: ["homelab: critical alert"]
+                    Priority:
+                      values: ["high"]
+                    Tags:
+                      values: ["rotating_light"]
       alertmanagerSpec:
+        # Mounts the Secret above at /etc/alertmanager/secrets/<name>/, which is
+        # what makes url_file resolvable. Without this the config is valid and
+        # Alertmanager fails at send time with a missing file — a failure that
+        # only appears when an alert actually fires, i.e. at the worst moment.
+        secrets:
+          - alertmanager-ntfy
         resources:
           requests: { cpu: 25m, memory: 64Mi }
           limits: { cpu: 100m, memory: 128Mi }
