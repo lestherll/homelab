@@ -13,7 +13,7 @@
       check /etc/fstab and `findmnt {{ bulk_storage_mount }}` before re-running.
     success_msg: "{{ bulk_storage_mount }} is mounted"
 
-- name: Create the local-path-bulk volume root
+- name: Create the k3s local-path-bulk volume root
   ansible.builtin.file:
     path: "{{ bulk_storage_k8s_volumes }}"
     state: directory

@@ -1,0 +1,285 @@
+# The three local-path-provisioner instances that back this cluster's three
+# StorageClasses. On k3s, `scratch` and `fast` (then `local-path` and
+# `local-path-retain`) were both served by the packaged addon in kube-system —
+# one instance, one nodePathMap, one disk. Talos ships no provisioner at all, so
+# the repo owns every instance, and that is what makes it possible to put each
+# class on a different disk: an instance claims only the StorageClasses whose
+# `provisioner:` field matches its own --provisioner-name, so three instances
+# with three names partition the claims cleanly.
+#
+# What differs between the three is exactly two things: --provisioner-name and
+# the nodePathMap path. Everything else — image, RBAC identity, helper pod,
+# setup/teardown scripts, resource envelope — is deliberately identical, so that
+# the classes differ in the guarantee they offer and in nothing else.
+#
+# The `node:` key is the real node name rather than
+# DEFAULT_PATH_FOR_NON_LISTED_NODES. Under Talos the mount path is identical on
+# every node by construction (it comes from UserVolumeConfig in the machine
+# config, not from an imperative Ansible assert), so the default-path escape
+# hatch is no longer protecting against anything — but it *would* silently give
+# a node whose machine config omits the volume a directory on its system disk.
+# Naming the node turns that into a Pending PVC instead. Harmless while every
+# cluster here is single-node; load-bearing the day one grows.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scratch-config
+  namespace: storage
+data:
+  # /var is Talos's EPHEMERAL partition — the writable filesystem on the system
+  # disk, which is the disk `terraform destroy -target=...system` throws away.
+  # That disposability is the guarantee `scratch` offers, not an accident of
+  # where the path landed.
+  config.json: |-
+    {
+      "nodePathMap": [
+        { "node": "talos-cp-01", "paths": ["/var/lib/local-path-provisioner"] }
+      ]
+    }
+  setup: |-
+    #!/bin/sh
+    set -eu
+    mkdir -m 0777 -p "${VOL_DIR}"
+    chmod 700 "${VOL_DIR}/.."
+  teardown: |-
+    #!/bin/sh
+    set -eu
+    rm -rf "${VOL_DIR}"
+  # Pinned rather than left at upstream's unpinned `busybox` default. The tag
+  # was inherited from what k3s shipped for its own helper pod; k3s is gone but
+  # the pin is still the right shape, and this image does nothing but mkdir and
+  # rm, so there is no reason to chase it. Re-verified present 2026-08-16.
+  helperPod.yaml: |-
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: helper-pod
+    spec:
+      containers:
+        - name: helper-pod
+          image: "rancher/mirrored-library-busybox:1.37.0"
+          imagePullPolicy: IfNotPresent
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fast-config
+  namespace: storage
+data:
+  # /var/mnt/fast is the `u-fast` UserVolume — a dedicated 20 GiB virtual disk,
+  # matched by disk serial rather than by /dev enumeration order, that the VM's
+  # own lifecycle does not own. See terraform/README.md.
+  config.json: |-
+    {
+      "nodePathMap": [
+        { "node": "talos-cp-01", "paths": ["/var/mnt/fast"] }
+      ]
+    }
+  setup: |-
+    #!/bin/sh
+    set -eu
+    mkdir -m 0777 -p "${VOL_DIR}"
+    chmod 700 "${VOL_DIR}/.."
+  teardown: |-
+    #!/bin/sh
+    set -eu
+    rm -rf "${VOL_DIR}"
+  helperPod.yaml: |-
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: helper-pod
+    spec:
+      containers:
+        - name: helper-pod
+          image: "rancher/mirrored-library-busybox:1.37.0"
+          imagePullPolicy: IfNotPresent
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bulk-config
+  namespace: storage
+data:
+  # /var/mnt/bulk is the `u-bulk` UserVolume, backed by an image file on the
+  # 5400rpm spinning disk at /mnt/storage. The guest knows nothing about that —
+  # the SSD/HDD placement decision lives entirely in the host's libvirt pool
+  # definition, which is the one place hardware is still named.
+  config.json: |-
+    {
+      "nodePathMap": [
+        { "node": "talos-cp-01", "paths": ["/var/mnt/bulk"] }
+      ]
+    }
+  setup: |-
+    #!/bin/sh
+    set -eu
+    mkdir -m 0777 -p "${VOL_DIR}"
+    chmod 700 "${VOL_DIR}/.."
+  teardown: |-
+    #!/bin/sh
+    set -eu
+    rm -rf "${VOL_DIR}"
+  helperPod.yaml: |-
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: helper-pod
+    spec:
+      containers:
+        - name: helper-pod
+          image: "rancher/mirrored-library-busybox:1.37.0"
+          imagePullPolicy: IfNotPresent
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scratch-provisioner
+  namespace: storage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scratch-provisioner
+  template:
+    metadata:
+      labels:
+        app: scratch-provisioner
+    spec:
+      serviceAccountName: local-path-provisioner
+      containers:
+        - name: local-path-provisioner
+          # Bumped from v0.0.36 (which tracked k3s's packaged version) now that
+          # nothing constrains it to match an addon. v0.0.37 verified as the
+          # latest release 2026-08-16.
+          image: rancher/local-path-provisioner:v0.0.37
+          imagePullPolicy: IfNotPresent
+          command:
+            - local-path-provisioner
+            - start
+            - --config
+            - /etc/config/config.json
+            - --provisioner-name
+            - homelab.local/scratch
+            - --configmap-name
+            - scratch-config
+            - --service-account-name
+            - local-path-provisioner
+            - --helper-pod-file
+            - /etc/config/helperPod.yaml
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/config/
+          # Sized against the bulk provisioner's observed steady state on k3s
+          # (idle at ~10Mi; it only does work when a PVC is created or deleted).
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 128Mi }
+      volumes:
+        - name: config-volume
+          configMap:
+            name: scratch-config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fast-provisioner
+  namespace: storage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fast-provisioner
+  template:
+    metadata:
+      labels:
+        app: fast-provisioner
+    spec:
+      serviceAccountName: local-path-provisioner
+      containers:
+        - name: local-path-provisioner
+          image: rancher/local-path-provisioner:v0.0.37
+          imagePullPolicy: IfNotPresent
+          command:
+            - local-path-provisioner
+            - start
+            - --config
+            - /etc/config/config.json
+            - --provisioner-name
+            - homelab.local/fast
+            - --configmap-name
+            - fast-config
+            - --service-account-name
+            - local-path-provisioner
+            - --helper-pod-file
+            - /etc/config/helperPod.yaml
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/config/
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 128Mi }
+      volumes:
+        - name: config-volume
+          configMap:
+            name: fast-config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bulk-provisioner
+  namespace: storage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bulk-provisioner
+  template:
+    metadata:
+      labels:
+        app: bulk-provisioner
+    spec:
+      serviceAccountName: local-path-provisioner
+      containers:
+        - name: local-path-provisioner
+          image: rancher/local-path-provisioner:v0.0.37
+          imagePullPolicy: IfNotPresent
+          command:
+            - local-path-provisioner
+            - start
+            - --config
+            - /etc/config/config.json
+            - --provisioner-name
+            - homelab.local/bulk
+            - --configmap-name
+            - bulk-config
+            - --service-account-name
+            - local-path-provisioner
+            - --helper-pod-file
+            - /etc/config/helperPod.yaml
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/config/
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 128Mi }
+      volumes:
+        - name: config-volume
+          configMap:
+            name: bulk-config

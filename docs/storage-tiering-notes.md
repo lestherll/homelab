@@ -3,6 +3,25 @@
 Why this host has two storage tiers, what belongs on each, and what is still
 outstanding. Written 2026-08-11 after a root-filesystem audit.
 
+> **Partially superseded by the Talos migration (2026-08-16).** Everything here
+> about *why* the tiers exist — the hardware asymmetry, what belongs where, the
+> no-quota trap, the PVC-migration runbook — is unchanged and still the
+> reference. What is superseded is the *naming and mechanism*:
+>
+> | This document | `infrastructure/storage/` today |
+> |---|---|
+> | `local-path` (cluster default) | `scratch` — and **no class is default** |
+> | `local-path-retain` | `fast` |
+> | `local-path-bulk` | `bulk` |
+> | k3s's `kube-system` addon serves two classes; the repo adds a third | the repo owns **all three** instances, in one `storage` namespace |
+> | tiers are host paths (`/`, `/mnt/storage/k8s-volumes`) | tiers are separate virtual disks (`/var/lib/local-path-provisioner`, `/var/mnt/fast`, `/var/mnt/bulk`) |
+>
+> The "second provisioner, not a reconfigured one" section below argues against
+> touching a k3s addon that no longer exists — read it as the origin of the
+> multi-instance pattern, which is now used three times rather than once. The
+> rename and the no-default decision are recorded in
+> `docs/talos-terraform-migration-notes.md`.
+
 ## The hardware asymmetry
 
 The host has two disks, and they are not interchangeable:

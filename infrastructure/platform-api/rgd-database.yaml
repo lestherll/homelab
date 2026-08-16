@@ -91,8 +91,9 @@ spec:
               platform.homelab/durability: durable
           storage:
             size: '${schema.spec.size == "small" ? "1Gi" : "5Gi"}'
-            # Retain, so a deleted Database leaves its data recoverable.
-            storageClass: local-path-retain
+            # `fast` is Retain, so a deleted Database leaves its data
+            # recoverable — and low-latency, which is what WAL fsyncs need.
+            storageClass: fast
           resources:
             requests:
               cpu: '${schema.spec.size == "small" ? "100m" : "250m"}'

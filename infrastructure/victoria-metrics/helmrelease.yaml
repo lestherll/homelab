@@ -43,7 +43,7 @@ spec:
 
       # The whole point of this component. Chart default is 1 (month).
       #
-      # This is the ONLY real bound on growth: local-path PVCs are plain hostPath
+      # This is the ONLY real bound on growth: these PVCs are plain hostPath
       # directories with no quota, so the 2Gi claim below is documentation, not a
       # limit (see AGENT.md). At ~10MB/year for five RAPL series that is academic,
       # but this store is intended to also receive wall-power metrics later, so
@@ -53,10 +53,10 @@ spec:
       persistentVolume:
         # Deliberately the HDD tier. This data is archival, queried rarely, and
         # entirely latency-tolerant — it has no business consuming SSD, even at
-        # ~10MB/year. local-path-bulk is also RECLAIMPOLICY: Retain (unlike the
-        # default class), so years of history survive an accidental PVC delete,
-        # which matters more here than for any other volume in the cluster.
-        storageClassName: local-path-bulk
+        # ~10MB/year. `bulk` is also RECLAIMPOLICY: Retain, so years of history
+        # survive an accidental PVC delete — which matters more here than for
+        # any other volume in the cluster.
+        storageClassName: bulk
         size: 2Gi
 
       # Starting point, not a measurement — nothing has run yet. Re-size off

@@ -6,10 +6,15 @@
 # TSDB) deliberately stays on the SSD — see docs/storage-tiering-notes.md.
 bulk_storage_mount: /mnt/storage
 
-# Backing directory for the `local-path-bulk` StorageClass, served by the second
-# local-path-provisioner instance in infrastructure/storage/. Mode 0700 matches
-# what the provisioner's own setup script chmods the volume parent to, so the
-# first provision doesn't show up as a spurious change.
+# Backing directory for the **k3s** cluster's `local-path-bulk` StorageClass.
+# Mode 0700 matches what the provisioner's own setup script chmods the volume
+# parent to, so the first provision doesn't show up as a spurious change.
+#
+# This is now k3s-only. infrastructure/storage/ was rewritten for Talos and its
+# bulk provisioner writes to /var/mnt/bulk inside the guest, not here — the
+# manifests that once served this path are gone. It stays because k3s is stopped
+# rather than destroyed at cutover and this directory holds its bulk PV data,
+# which is the fallback. It retires with k3s itself, not before.
 bulk_storage_k8s_volumes: "{{ bulk_storage_mount }}/k8s-volumes"
 
 # HDD-backed libvirt storage pool, holding the Talos VM's `bulk` data disk

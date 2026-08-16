@@ -22,11 +22,16 @@ spec:
         # D7's ~20%/~3GB budget with headroom for Loki's later addition.
         retention: 15d
         # retention (time) alone does not bound disk use, and the 10Gi below is
-        # decorative: local-path provisions a plain hostPath directory with no
-        # quota, so `df` inside the pod reports the whole root filesystem. Left
-        # unbounded, a cardinality spike fills the SSD and takes the cluster
-        # with it rather than dropping the oldest blocks. Set below the claim so
-        # Prometheus compacts against its own limit first.
+        # decorative: the provisioner hands out a plain hostPath directory with
+        # no quota, so `df` inside the pod reports the whole `fast` filesystem.
+        # Left unbounded, a cardinality spike fills that volume and every other
+        # durable claim on it rather than dropping the oldest blocks. Set below
+        # the claim so Prometheus compacts against its own limit first.
+        #
+        # 8GiB against a 20 GiB volume shared with Postgres and the SeaweedFS
+        # filer is the tightest this number has been — it was sized when the
+        # backing disk was a 106G SSD. Revisit it, not the volume, if the tier
+        # gets crowded.
         retentionSize: 8GiB
         # Re-sized 2026-08-12, after the kubelet cardinality drop halved active
         # series (155,621 -> 80,475). Memory tracks head series, so the old
@@ -47,7 +52,14 @@ spec:
         storageSpec:
           volumeClaimTemplate:
             spec:
-              storageClassName: local-path
+              # `fast`, not `scratch`, and this is the one observability claim
+              # where the tier is a real decision rather than a rename. Two
+              # reasons: an 8GiB TSDB does not belong on a 20 GiB system disk it
+              # would share with etcd and every containerd layer, and `fast`
+              # being a fixed-size volume means a cardinality spike fills 20 GiB
+              # and stops instead of taking the node down. That it also survives
+              # a VM rebuild is a welcome side effect, not the reason.
+              storageClassName: fast
               accessModes: ["ReadWriteOnce"]
               resources:
                 requests:
@@ -82,7 +94,10 @@ spec:
         storage:
           volumeClaimTemplate:
             spec:
-              storageClassName: local-path
+              # Silences and notification state. Small, and cheap to lose — the
+              # alert rules themselves come from the chart, so a rebuild costs
+              # at most a re-silence.
+              storageClassName: scratch
               accessModes: ["ReadWriteOnce"]
               resources:
                 requests:
@@ -140,7 +155,10 @@ spec:
       persistence:
         enabled: true
         type: pvc
-        storageClassName: local-path
+        # Grafana's sqlite DB: users, prefs, and any dashboard edited in the UI
+        # rather than committed. Dashboards proper are provisioned from labelled
+        # ConfigMaps under dashboards/, so they are unaffected by losing this.
+        storageClassName: scratch
         accessModes: ["ReadWriteOnce"]
         size: 1Gi
       # 256Mi was enough for classic Grafana but Grafana 13's unified-storage
