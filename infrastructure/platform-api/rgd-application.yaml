@@ -20,6 +20,21 @@
 #           and additive. fastapi-echo's existing instance is expected to
 #           reconcile unchanged under this revision — confirmed as part of
 #           this PR's own verification, not assumed.
+#   rev 3 — persistence changes from a host bind-mount to a PVC:
+#           `hostPath` (required) is REPLACED by `size`/`tier`. This is the
+#           first BREAKING change to this API, and the only one so far that
+#           could not be made additively — the field being removed was
+#           required, and its value was a path that does not exist on the new
+#           node. Landing with the Talos cutover for that reason.
+#
+#           Named casualty, accepted when the migration was planned:
+#           personal-finance-dashboard's Application sets persistence.hostPath
+#           and its manifests live in its own repo, so that instance stops
+#           reconciling until that repo drops the field. Its host-side CLI
+#           workflow — which read the same directory from the host shell —
+#           goes with it; that CLI moves into a container or becomes an
+#           endpoint on the app. fastapi-echo sets no persistence and is
+#           unaffected.
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
@@ -52,9 +67,27 @@ spec:
         runAsUser: integer | description="pod-level runAsUser; omit to leave unset"
         runAsGroup: integer | description="pod-level runAsGroup; omit to leave unset"
         fsGroup: integer | description="pod-level fsGroup; omit to leave unset"
+      # Revision 3 replaces this type's `hostPath` with a claim on a storage
+      # tier. It was the worst hardware leak in the repo: a named user's home
+      # directory, required, in a platform API — an app author had to know the
+      # layout of one specific machine to ask for a gigabyte of disk. It also
+      # could not survive the move to Talos, which has no home directories and
+      # no shell to create one, so `type: Directory` was unsatisfiable there by
+      # construction.
+      #
+      # The replacement mirrors the `size: small|medium` idiom this API already
+      # uses, so it adds no new concept while deleting the only field that
+      # required knowing anything about the host. An app's deploy/ directory is
+      # now portable to a second cluster unchanged, which is the point.
+      #
+      # `scratch` is deliberately NOT offered as a tier. This field exists to
+      # make state survive, and a class whose contract is "disposable" would be
+      # an attractive nuisance here; an app that wants scratch space should use
+      # emptyDir, which needs no platform feature at all.
       Persistence:
-        hostPath: string | required=true description="host directory to bind-mount, e.g. /home/lestherll/projects/<app>/data"
-        mountPath: string | default="/app/data" description="path inside the container the hostPath is mounted at"
+        size: string | default="1Gi" description="volume size, e.g. 1Gi"
+        tier: string | enum="fast,bulk" default="fast" description="fast = durable, low-latency, small; bulk = durable, high-capacity, sequential"
+        mountPath: string | default="/app/data" description="path inside the container the volume is mounted at"
     spec:
       image: string | required=true
       port: integer | default=8000
@@ -267,6 +300,44 @@ spec:
             - kind: S3Identity
               name: ${schema.metadata.namespace + "-" + schema.metadata.name + "-" + attachment.as}
 
+    # The backing claim for spec.persistence, created only when that field is
+    # set. `includeWhen` is evaluated against the schema alone, before the graph
+    # is built, so it can gate a resource on an optional field the way the
+    # dyn(has(...)) ternaries below gate individual fields — confirmed against
+    # the kro 0.9.3 CRD on the live cluster.
+    #
+    # NOTE the claim outlives the Application. Both offered tiers are
+    # reclaimPolicy: Retain, so deleting an Application leaves its PV behind for
+    # manual cleanup rather than destroying data — deliberate, and the same
+    # treatment Database gets under D4. It does mean an app deleted and
+    # recreated under the same name binds a fresh volume while the old one sits
+    # Released; that is a cleanup chore, not data loss, which is the right way
+    # round.
+    - id: dataVolume
+      includeWhen:
+        - ${has(schema.spec.persistence)}
+      template:
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: ${schema.metadata.name + "-data"}
+          namespace: ${schema.metadata.namespace}
+          # D4 classifies this as Durable — an app only asks for persistence
+          # when losing the data would matter. Labelled on the PVC because PVs
+          # do not inherit PVC labels, and the unlabelled-volume alerting D4
+          # calls for has to look at claims.
+          labels:
+            platform.homelab/durability: durable
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          # The tier name IS the StorageClass name — the one place this API's
+          # vocabulary and the cluster's coincide, because both were chosen to
+          # describe the same guarantee. See infrastructure/storage/.
+          storageClassName: ${schema.spec.persistence.tier}
+          resources:
+            requests:
+              storage: ${schema.spec.persistence.size}
+
     - id: deployment
       template:
         apiVersion: apps/v1
@@ -414,12 +485,19 @@ spec:
                       "name": "data",
                       "mountPath": schema.spec.persistence.mountPath
                     }] : [])}
+              # claimName is RECOMPUTED here rather than read back as
+              # ${dataVolume.metadata.name}. That is not a style choice: a
+              # reference to a conditionally-included resource creates a graph
+              # dependency that has to resolve even on instances where the
+              # resource is excluded. The name is a pure function of the
+              # instance name, so recomputing it keeps this Deployment
+              # independent of whether the PVC was included — the same reasoning
+              # as identityRef in s3Credentials above.
               volumes: >-
                 ${dyn(has(schema.spec.persistence) ? [{
                   "name": "data",
-                  "hostPath": {
-                    "path": schema.spec.persistence.hostPath,
-                    "type": "Directory"
+                  "persistentVolumeClaim": {
+                    "claimName": schema.metadata.name + "-data"
                   }
                 }] : [])}
 

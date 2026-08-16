@@ -1,7 +1,0 @@
-# {{ ansible_managed }}
-disable:
-  - traefik
-  - servicelb
-node-ip: "{{ ansible_default_ipv4.address }}"
-tls-san:
-  - "{{ tailscale_ip }}"

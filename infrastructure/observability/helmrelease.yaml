@@ -22,11 +22,16 @@ spec:
         # D7's ~20%/~3GB budget with headroom for Loki's later addition.
         retention: 15d
         # retention (time) alone does not bound disk use, and the 10Gi below is
-        # decorative: local-path provisions a plain hostPath directory with no
-        # quota, so `df` inside the pod reports the whole root filesystem. Left
-        # unbounded, a cardinality spike fills the SSD and takes the cluster
-        # with it rather than dropping the oldest blocks. Set below the claim so
-        # Prometheus compacts against its own limit first.
+        # decorative: the provisioner hands out a plain hostPath directory with
+        # no quota, so `df` inside the pod reports the whole `fast` filesystem.
+        # Left unbounded, a cardinality spike fills that volume and every other
+        # durable claim on it rather than dropping the oldest blocks. Set below
+        # the claim so Prometheus compacts against its own limit first.
+        #
+        # 8GiB against a 20 GiB volume shared with Postgres and the SeaweedFS
+        # filer is the tightest this number has been — it was sized when the
+        # backing disk was a 106G SSD. Revisit it, not the volume, if the tier
+        # gets crowded.
         retentionSize: 8GiB
         # Re-sized 2026-08-12, after the kubelet cardinality drop halved active
         # series (155,621 -> 80,475). Memory tracks head series, so the old
@@ -47,7 +52,14 @@ spec:
         storageSpec:
           volumeClaimTemplate:
             spec:
-              storageClassName: local-path
+              # `fast`, not `scratch`, and this is the one observability claim
+              # where the tier is a real decision rather than a rename. Two
+              # reasons: an 8GiB TSDB does not belong on a 20 GiB system disk it
+              # would share with etcd and every containerd layer, and `fast`
+              # being a fixed-size volume means a cardinality spike fills 20 GiB
+              # and stops instead of taking the node down. That it also survives
+              # a VM rebuild is a welcome side effect, not the reason.
+              storageClassName: fast
               accessModes: ["ReadWriteOnce"]
               resources:
                 requests:
@@ -82,7 +94,10 @@ spec:
         storage:
           volumeClaimTemplate:
             spec:
-              storageClassName: local-path
+              # Silences and notification state. Small, and cheap to lose — the
+              # alert rules themselves come from the chart, so a rebuild costs
+              # at most a re-silence.
+              storageClassName: scratch
               accessModes: ["ReadWriteOnce"]
               resources:
                 requests:
@@ -140,7 +155,10 @@ spec:
       persistence:
         enabled: true
         type: pvc
-        storageClassName: local-path
+        # Grafana's sqlite DB: users, prefs, and any dashboard edited in the UI
+        # rather than committed. Dashboards proper are provisioned from labelled
+        # ConfigMaps under dashboards/, so they are unaffected by losing this.
+        storageClassName: scratch
         accessModes: ["ReadWriteOnce"]
         size: 1Gi
       # 256Mi was enough for classic Grafana but Grafana 13's unified-storage
@@ -159,25 +177,59 @@ spec:
         requests: { cpu: 100m, memory: 384Mi }
         limits: { cpu: 300m, memory: 768Mi }
 
+    # Control-plane component monitors: all off, because they cannot work here.
+    # Talos serves etcd/scheduler/controller-manager metrics behind its own PKI,
+    # which in-cluster credentials do not satisfy. Nothing is lost: no rule or
+    # dashboard in this repo joins on those jobs, and the chart drops their
+    # default alerts along with the monitors (so nothing is left firing at a
+    # target that will never exist).
+    kubeEtcd:
+      enabled: false
+    kubeControllerManager:
+      enabled: false
+    kubeScheduler:
+      enabled: false
+
     kube-state-metrics:
       resources:
         requests: { cpu: 10m, memory: 32Mi }
         limits: { cpu: 50m, memory: 64Mi }
 
     prometheus-node-exporter:
-      # Already the chart's defaults — set explicitly for documentation. Same
-      # technique the current podman setup uses (network_mode: host, pid: host,
-      # --path.rootfs=/host), just re-expressed as a k8s DaemonSet: no loss of
-      # fidelity, since it reads host-mounted /proc,/sys,/ directly. The
-      # regression this introduces (binds 0.0.0.0:9100 instead of the tailnet
-      # IP only) is fixed at the host firewall level — see host_prereqs's ufw
-      # rule, not here.
+      # Both are the chart's defaults, set explicitly for documentation.
+      #
+      # hostNetwork was RECONSIDERED at the Talos cutover and deliberately KEPT.
+      # Its old justification is indeed gone: it used to bind 0.0.0.0:9100 on
+      # the bare-metal host, a regression that host_prereqs's ufw rule fenced
+      # off. There is no ufw inside the guest. But the exposure it was fencing
+      # is gone too — the VM sits on a NAT'd libvirt network with no inbound
+      # route from anywhere but the host, so :9100 is not reachable off-box at
+      # all.
+      #
+      # Turning it off was the alternative and was rejected as an unforced risk:
+      # /proc/net is per-network-namespace (it resolves through /proc/self/net
+      # regardless of the host /proc bind mount), so a non-hostNetwork
+      # node-exporter reports the POD's interfaces rather than the node's, and
+      # the netdev/netclass collectors — precisely the ones the 500m limit below
+      # was sized for — would silently start describing the wrong netns. Losing
+      # network metrics to buy back a port that is already unreachable is a bad
+      # trade.
+      #
+      # NOTE: what this DaemonSet now calls "the host" is the VM, not the
+      # metal. Everything below /host is the guest's view.
       hostNetwork: true
       hostPID: true
       # CPU limit raised 50m -> 500m, 2026-08-12. The 50m above was the chart's
       # default, adopted here "for documentation" without ever being measured
-      # against this host — and this host has ~20 network interfaces (veths,
+      # against this host — and that host had ~20 network interfaces (veths,
       # cni0, flannel.1, tailscale0) for the netclass collector to walk.
+      #
+      # That interface count is a guest-side question after cutover: tailscale0
+      # stays on the metal (Tailscale is host-only by decision) and the bridge
+      # is different, so the walk is probably cheaper. 500m is kept as the safe
+      # direction to be wrong in — over-provisioning a 6%-of-box limit costs
+      # nothing, and the failure mode below is what under-provisioning looks
+      # like. Re-measure before trimming it.
       #
       # At 50m the container got a 5% duty cycle and was throttled in 85.5% of
       # its CFS periods. A ~194ms scrape (3.87s wall x 0.05 duty) stretched to
@@ -198,23 +250,11 @@ spec:
       resources:
         requests: { cpu: 10m, memory: 16Mi }
         limits: { cpu: 500m, memory: 32Mi }
-      # Lets the rapl collector read /sys/class/powercap/intel-rapl:*/energy_uj
-      # for host power metrics. That file is 0400 root:root (the kernel's
-      # CVE-2020-8694/PLATYPUS mitigation), so as uid 65534 the collector was
-      # failing EACCES on every scrape. GID 600 is the `rapl` group created by
-      # host_prereqs, which also installs the udev rule that chgrps the counters
-      # to it — this key alone does nothing without that half.
-      #
-      # This is a supplementary group rather than fsGroup on purpose: fsGroup
-      # relabels volume ownership, which is a no-op on sysfs. Supplementary
-      # groups are what the kernel actually checks on the bind-mounted file.
-      #
-      # Deliberately NOT runAsUser: 0, which would have needed no host change at
-      # all. This DaemonSet mounts host / at /host/root, so root here means a
-      # network-listening service can read /etc/shadow, the SOPS age key and the
-      # k3s node token. The whole point is one extra group, not one extra root.
-      securityContext:
-        supplementalGroups: [600]
+      # This DaemonSet measures the VM, not the metal. /sys/class/powercap is
+      # empty inside the guest, so the rapl collector reports nothing and the
+      # power dashboards under dashboards/ have no data source — reconnecting
+      # them means running an exporter on the host, which is LES-97, not a
+      # config change here.
 
     prometheusOperator:
       resources:
@@ -238,30 +278,21 @@ spec:
         # diagnose Grafana OOMKills. If a future OOM investigation comes up
         # short on resolution, this is the line to revisit.
         cAdvisorInterval: 30s
-        # k3s runs the apiserver, controller-manager, scheduler and kubelet in
-        # ONE process sharing one Prometheus registry, so the kubelet's
-        # :10250/metrics endpoint serves that whole registry — including every
-        # apiserver_* and etcd_* metric. They are therefore stored twice: once
-        # under job="apiserver", and again under job="kubelet".
+        # DO NOT add a broad `(apiserver|etcd)_.*` drop here. It is tempting
+        # because the kubelet endpoint is the largest single source of series,
+        # but this cluster runs the control-plane components as separate static
+        # pods with separate registries — so the kubelet exposes only kubelet
+        # metrics, and such a rule would drop nothing on a good day. On a bad
+        # one it is a footgun: matching on __name__ alone means the moment a
+        # genuine kubelet series is named that way it vanishes with no second
+        # copy anywhere.
         #
-        # Measured 2026-08-12 before this drop: 148,366 series total, of which
-        # job="kubelet" was 79,694 — and only 4,906 of those were genuine
-        # kubelet/container metrics. The other ~69,000 (47% of the entire TSDB)
-        # were duplicated apiserver/etcd series. A kubelet exposing
-        # etcd_request_duration_seconds_bucket is the tell; it has no etcd
-        # client. This is a k3s artifact, not a kube-prometheus-stack default —
-        # the chart's own drops for this endpoint assume a standalone kubelet.
-        #
-        # Dropping them loses no information: the same series remain under
-        # job="apiserver", which is what every default rule and dashboard
-        # queries. workqueue_* is deliberately NOT dropped — a kubelet has real
-        # workqueues of its own, and at ~2k series it isn't worth the ambiguity.
+        # `retention` and `retentionSize` above were sized against a different
+        # cluster's series count. Re-measure before trusting either.
         metricRelabelings:
           # Chart default for this endpoint, preserved — setting this key
-          # replaces the list rather than appending to it.
+          # replaces the list rather than appending to it, so it has to be
+          # restated rather than inherited.
           - action: drop
             sourceLabels: [__name__, le]
             regex: (csi_operations|storage_operation_duration)_seconds_bucket;(0.25|2.5|15|25|120|600)(\.0)?
-          - action: drop
-            sourceLabels: [__name__]
-            regex: (apiserver|etcd)_.*

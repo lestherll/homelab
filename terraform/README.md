@@ -115,13 +115,13 @@ enumeration order, which would break the first time a disk is added.
 
 ### The one hard safety rule
 
-> **Never write into k3s's data paths.** Not `/var/lib/rancher/k3s/storage`,
-> not `/mnt/storage/k8s-volumes`.
+> **A pool path must be a directory this repo owns, never one holding live
+> data.** `/var/lib/libvirt/images` and `/mnt/storage/libvirt-images`, nothing
+> else.
 
-k3s is *stopped, not destroyed* across this migration, and `systemctl start
-k3s` is the fallback for every failure in the plan. Writing a VM image into
-those trees destroys that fallback silently, with no error at the time. Every
-other mistake here is recoverable; this one is not.
+Pointing a pool at a directory that already holds something else destroys it
+silently, with no error at the time — a sparse image just starts consuming the
+space. Every other mistake here is recoverable; this one is not.
 
 The libvirt pools are placed accordingly (`/var/lib/libvirt/images` and
 `/mnt/storage/libvirt-images`), and the HDD pool is defined by the

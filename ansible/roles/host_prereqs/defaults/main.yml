@@ -41,11 +41,6 @@ hypervisor_packages:
 # only virtual block devices and selects them by serial. See the storage design
 # section of the migration notes.
 #
-# THE SAFETY RULE: these paths must never fall under k3s's data directories
-# (/var/lib/rancher/k3s/storage, /mnt/storage/k8s-volumes). k3s is stopped but
-# not destroyed during the migration, and `systemctl start k3s` is the fallback
-# for every failure in this plan — writing a VM image into those trees would
-# destroy that fallback silently, with no error at the time.
 libvirt_ssd_pool_name: homelab-ssd
 libvirt_ssd_pool_path: /var/lib/libvirt/images
 
@@ -66,7 +61,6 @@ libvirt_talos_network_bridge: virbr-talos
 #   10.96.0.0/12    Kubernetes default SERVICE CIDR  <- 10.100.0.0/24 sits
 #                                                       inside this one
 #   10.244.0.0/16   Kubernetes default POD CIDR
-#   10.42.0.0/24    the existing k3s pod CIDR
 #   192.168.0.0/24  the house LAN
 #   192.168.122.0/24 libvirt's own `default` network
 #   100.64.0.0/10   Tailscale

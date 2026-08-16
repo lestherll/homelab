@@ -1,9 +1,12 @@
 ---
 # Everything below writes into {{ bulk_storage_mount }}. If the disk is NOT
-# mounted there, those paths are just empty directories on the root filesystem —
-# so a bulk PVC would "provision" successfully while quietly filling the very
-# SSD this tier exists to drain. Fail loudly instead of silently doing the
-# opposite of the intent.
+# mounted there, that path is just a directory on the root filesystem — so the
+# bulk disk image would be created successfully while quietly filling the very
+# SSD this tier exists to drain, and a sparse image gives no warning as it
+# grows. Fail loudly instead of silently doing the opposite of the intent.
+#
+# This is the only hardware assertion left anywhere in the design: below this
+# role, nothing knows one disk from another.
 - name: Assert the bulk disk is actually mounted
   ansible.builtin.assert:
     that:
@@ -13,15 +16,7 @@
       check /etc/fstab and `findmnt {{ bulk_storage_mount }}` before re-running.
     success_msg: "{{ bulk_storage_mount }} is mounted"
 
-- name: Create the local-path-bulk volume root
-  ansible.builtin.file:
-    path: "{{ bulk_storage_k8s_volumes }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0700"
-
-# --- HDD-backed libvirt pool for the Talos VM's bulk data disk -------------
+# --- HDD-backed libvirt pool for the VM's bulk data disk -------------------
 # Guarded by the assert at the top of this role; see the comment on
 # bulk_storage_libvirt_pool_path in defaults/main.yml for why it lives here
 # rather than alongside the SSD pool in host_prereqs.

@@ -1,20 +1,24 @@
-# Deliberately a faithful copy of the privilege set k3s grants its own
-# local-path-provisioner, rather than a hand-tightened variant. The provisioner
-# drives a helper pod to mkdir/rm on the node, and the exact verb set it needs
+# One identity shared by all three provisioner instances. They differ only in
+# which node path they write to and which StorageClass they answer for; the
+# privilege each needs is identical, and local-path-provisioner has no
+# per-instance authorization model to exploit even if they were split.
+#
+# Deliberately upstream's own privilege set for local-path-provisioner, rather
+# than a hand-tightened variant. The provisioner drives a helper pod to
+# mkdir/rm on the node, and the exact verb set it needs
 # across pods/pods-log/endpoints is an upstream implementation detail that has
 # changed between releases — a tighter guess here fails at provision time, in a
-# path that only runs when a new PVC is created. This grants no privilege that
-# the identical addon in kube-system doesn't already hold.
+# path that only runs when a new PVC is created.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: local-path-bulk
-  namespace: storage-bulk
+  name: local-path-provisioner
+  namespace: storage
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: local-path-bulk
+  name: local-path-provisioner
 rules:
   - apiGroups: [""]
     resources: ["nodes", "persistentvolumeclaims", "configmaps", "pods/log"]
@@ -32,12 +36,12 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: local-path-bulk
+  name: local-path-provisioner
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: local-path-bulk
+  name: local-path-provisioner
 subjects:
   - kind: ServiceAccount
-    name: local-path-bulk
-    namespace: storage-bulk
+    name: local-path-provisioner
+    namespace: storage

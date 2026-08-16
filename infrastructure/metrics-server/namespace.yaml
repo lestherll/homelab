@@ -1,0 +1,7 @@
+# Cluster plumbing gets its own namespace, same as `storage`. Not kube-system:
+# every repo-managed component here is namespaced, so what lives in kube-system
+# stays limited to what the distribution itself puts there.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: metrics-server

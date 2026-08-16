@@ -108,12 +108,35 @@ spec:
     runAsGroup: 1000
     fsGroup: 1000
   persistence:
-    hostPath: /home/you/projects/myapp/data   # host directory to bind-mount
-    mountPath: /app/data                      # default /app/data
+    size: 1Gi                       # default 1Gi
+    tier: fast                      # fast|bulk, default fast
+    mountPath: /app/data            # default /app/data
 ```
 
 Renders `Deployment` + `Service` + `Ingress` (`ingressClassName: tailscale`,
-same shape every ingress in this cluster already uses).
+same shape every ingress in this cluster already uses), plus a
+`PersistentVolumeClaim` named `<app>-data` when `persistence` is set.
+
+### Choosing a persistence tier
+
+| `tier` | Guarantee | Use for |
+|---|---|---|
+| `fast` (default) | durable, low-latency, small | anything transactional or randomly accessed — an embedded DB, an index, a cache you need to survive a restart |
+| `bulk` | durable, high-capacity, sequential | large files written and read end-to-end — uploads, archives, generated media |
+
+Both retain their data if the `Application` is deleted, so removing an app
+leaves a `Released` volume to clean up by hand rather than destroying its
+contents. There is no disposable tier here on purpose: if the data does not
+need to survive a restart, use an `emptyDir` in your own manifest and skip
+`persistence` entirely.
+
+> **Changed (revision 3, Talos cutover).** `persistence.hostPath` is gone,
+> replaced by `size`/`tier`. It required naming a directory on one specific
+> machine, which no longer exists — the new node has no home directories. If
+> your app still sets `hostPath`, its `Application` will not reconcile until
+> you swap the field; nothing else in the spec changes, and `mountPath` keeps
+> its meaning and its default. Data in an old host directory is not migrated
+> for you — copy it into the new volume before deleting the old path.
 
 ### Attachment lists are always lists
 

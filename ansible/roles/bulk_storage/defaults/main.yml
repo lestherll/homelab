@@ -6,17 +6,7 @@
 # TSDB) deliberately stays on the SSD — see docs/storage-tiering-notes.md.
 bulk_storage_mount: /mnt/storage
 
-# Backing directory for the `local-path-bulk` StorageClass, served by the second
-# local-path-provisioner instance in infrastructure/storage/. Mode 0700 matches
-# what the provisioner's own setup script chmods the volume parent to, so the
-# first provision doesn't show up as a spurious change.
-bulk_storage_k8s_volumes: "{{ bulk_storage_mount }}/k8s-volumes"
-
-# HDD-backed libvirt storage pool, holding the Talos VM's `bulk` data disk
-# image. Sibling of k8s-volumes, never inside it: k3s is stopped rather than
-# destroyed across the migration and `systemctl start k3s` is the fallback for
-# every failure in the plan, so writing a VM image into k3s's data tree would
-# destroy that fallback silently. See docs/talos-terraform-migration-notes.md.
+# HDD-backed libvirt storage pool, holding the VM's `bulk` data disk image.
 #
 # This pool is defined by *this* role rather than host_prereqs on purpose. The
 # assert above is the one remaining hardware assertion in the whole design, and

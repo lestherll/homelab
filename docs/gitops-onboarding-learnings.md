@@ -71,6 +71,18 @@ with actual persistence requirements.
   the host-side copy. Worth remembering: this cluster's only StorageClass
   is also node-local disk under the hood, so hostPath vs. PVC was never a
   resilience decision — neither survives losing this machine.
+
+  > **Reversed by the Talos migration (2026-08-16).** `Application`
+  > revision 3 replaces `persistence.hostPath` with a PVC
+  > (`size`/`tier`), so this choice is no longer available. What broke it
+  > was the *premise*, not the reasoning: the shared-files argument only
+  > holds while there is a host shell looking at the same disk, and Talos
+  > has neither a shell nor home directories. The host-side CLI is the
+  > named casualty — it moves into a container or becomes an endpoint on
+  > the app. The observation that hostPath vs. PVC was never a resilience
+  > decision still stands, and is now moot for a second reason: both tiers
+  > live on virtual disks the VM's lifecycle does not own, so a PVC *does*
+  > survive rebuilding the node (though still not losing the machine).
 - **Off-host backup deliberately deferred, not forgotten.** Instance #2
   exposed the first real "what if the host dies" gap for actual
   irreplaceable data (unlike Grafana/Prometheus state, which is

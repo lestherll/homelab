@@ -46,13 +46,13 @@ module "cluster" {
   talos_version      = "v1.13.8"
   kubernetes_version = "v1.36.2"
 
-  # Sandbox sizing: 4Gi coexists with the live k3s cluster (~8Gi available), so
-  # every derisking phase — including the storage lifecycle rehearsal that
-  # proves the architecture — runs with the current cluster still serving.
-  # Raise this only after `systemctl stop k3s`, which is the point at which the
-  # VM gets the whole machine.
-  vcpus      = 4
-  memory_mib = 4096
+  # The node gets the machine. 12Gi of the host's 15Gi, leaving ~3Gi for Ubuntu,
+  # libvirt and qemu's own per-VM overhead — RAM here is spent, not shared, so
+  # this is the number that decides how much the cluster can actually hold.
+  # vcpus can exceed nothing useful: 8 is every core, and oversubscribing a
+  # single-guest host buys nothing.
+  vcpus      = 8
+  memory_mib = 12288
 
   # Pool names come from Ansible: host_prereqs owns the SSD pool, bulk_storage
   # owns the HDD pool (behind its mount assert).

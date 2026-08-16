@@ -1,11 +1,10 @@
 # A shell on the node, for a node that has no shell.
 #
-# Talos has no SSH and no shell, so the local-path debugging that is
-# `sudo ls /var/lib/rancher/k3s/storage/...` under k3s becomes this. The
-# migration notes call this out as a genuine regression for storage debugging
-# specifically — which is where this platform's more interesting failures have
-# historically been — and recommend keeping a manifest in the repo rather than
-# reinventing one under pressure. This is that manifest.
+# Talos has no SSH and no shell, so inspecting a local-path volume directly —
+# which is where this platform's more interesting failures have historically
+# been — needs a pod instead of a login. Kept as a manifest in the repo rather
+# than reinvented under pressure, since it is wanted exactly when something is
+# already broken.
 #
 #   kubectl apply -f terraform/debug-pod.yaml
 #   kubectl -n node-debug exec -it node-debug -- sh

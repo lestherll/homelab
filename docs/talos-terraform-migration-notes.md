@@ -719,10 +719,15 @@ primitive, which is what makes cold-apply testing routine.
 
 ### Still to do
 
-- **Phase 3 onward.** Nothing has been pointed at Flux yet; the cluster is
-  empty beyond its own control plane. `infrastructure/` still needs the forced
-  changes listed under Alternative A (own SSD provisioner, storage-class
-  renames, metrics-server, observability cleanup) before it can reconcile here.
+- **Phase 3 is written, not run.** Nothing has been pointed at Flux yet; the
+  cluster is still empty beyond its own control plane. Of the forced changes
+  listed under Alternative A, the storage rewrite, the class renames,
+  metrics-server, the observability cleanup and the `Application.persistence`
+  PVC are **built** — see the status note on that list, which also records
+  where the built shape differs from what was predicted. None of it has
+  reconciled anywhere, because none of it can until k3s stops.
+- **The watchdog (forced change #5) is the one still unbuilt** that is not
+  deferred by decision.
 - **Re-run the Ansible converge** to confirm idempotency (`changed=0`) and to
   apply the pool-autostart fix, which was corrected in the role after the
   network and pools were already created by hand.
@@ -1190,6 +1195,17 @@ instructions.
 
 ## Forced changes in `infrastructure/` (all on a migration branch)
 
+> **Status 2026-08-16: 1, 2, 3, 4 and 6 are built** on
+> `feat/talos-cutover-infra`, and none of them can merge before cutover day.
+> Where the built shape differs from what is written below, the list is
+> annotated inline — the differences are the interesting part, so they are
+> corrected in place rather than silently. **5 and 7 remain**; 7 is deferred by
+> decision (power metrics go dark, accepted), and 8 is design-only.
+>
+> One prerequisite was missed by this list entirely: metrics-server needs the
+> kubelet to stop self-signing its serving certificate, which is a *Terraform*
+> change plus a second controller. See item 3.
+
 1. **Own SSD provisioner.** k3s ships the `rancher.io/local-path` provisioner;
    Talos ships nothing, but `local-path` (3 observability PVCs) and
    `local-path-retain` (CNPG, SeaweedFS filer; provisioner field immutable on
@@ -1199,24 +1215,92 @@ instructions.
    `/var/lib/local-path-storage`). **Cannot merge while k3s is live** — two
    same-named provisioners would race the same PVCs. Merges with the migration
    PR on cutover day.
+
+   **Built, but as three instances, not two, and none named
+   `rancher.io/local-path`.** Since the classes were being renamed anyway
+   (below), keeping the old provisioner string bought nothing — they are
+   `homelab.local/{scratch,fast,bulk}`, one Deployment each, sharing one
+   ServiceAccount in a single `storage` namespace. The separate `storage-bulk`
+   namespace is gone; it only ever existed to avoid colliding with k3s's
+   kube-system addon.
+
+   **The namespace needs `pod-security.kubernetes.io/enforce: privileged`,
+   and this list did not anticipate it.** Talos enforces `baseline`, baseline
+   forbids `hostPath`, and every one of these provisioners works by launching a
+   helper pod that bind-mounts the node path. Without the label, provisioning
+   fails at the first PVC — not at deploy — with the reason only in the
+   provisioner log.
 2. **`local-path-bulk` nodePathMap** → the new `/var/mnt/...` path. Also
    replace `DEFAULT_PATH_FOR_NON_LISTED_NODES` with the explicit node name —
    harmless while every cluster is single-node, load-bearing the day one
    grows.
 3. **Add `metrics-server` HelmRelease.** Talos doesn't bundle it; `kubectl top`
    (and the resource-diagnose skill) depend on it.
+
+   **Built — and it is a three-part change, which this list understated as
+   one.** A Talos kubelet self-signs its serving certificate, so metrics-server
+   fails x509 validation and `kubectl top` reports "metrics not available" with
+   the real reason visible only in its log. Both of these are required
+   alongside the HelmRelease, and neither works alone:
+   - `machine.kubelet.extraArgs.rotate-server-certificates: true` — a
+     **Terraform** change (`modules/talos-cluster/talos.tf`), so this forced
+     change is not confined to `infrastructure/` after all.
+   - `kubelet-serving-cert-approver`, vendored verbatim at v0.11.0 alongside
+     metrics-server. kube-controller-manager deliberately does not auto-approve
+     `kubernetes.io/kubelet-serving` CSRs, so without it the CSR sits Pending
+     and the kubelet keeps its self-signed cert — the same symptom as doing
+     nothing.
+
+   `--kubelet-insecure-tls` is the one-line alternative and was rejected:
+   defensible while the scrape never leaves a single node, but D3 plans a
+   second machine, and that is exactly when a disabled TLS check stops being
+   local and nobody remembers it is set.
 4. **Observability HelmRelease cleanup.** Drop the k3s one-process
    metricRelabelings workaround (dead config on vanilla k8s); disable
    `kubeEtcd`/`kubeControllerManager`/`kubeScheduler` monitors (Talos serves
    these with its own PKI; and nothing is lost — k3s served those series on
    :10250 and they were being dropped anyway); reconsider node-exporter's
    `hostNetwork: true` (its ufw justification is gone).
+
+   **Built. Two corrections to the reasoning above, both found by doing it.**
+   First, "they were being dropped anyway" is right about the *outcome* but
+   wrong about the mechanism, and the mechanism is why the drop rule must not
+   survive: it matched `(apiserver|etcd)_.*` on `__name__` alone, which was
+   safe only because k3s guaranteed a duplicate under `job="apiserver"`. On
+   Talos there is no duplicate, so the same rule would silently eat any genuine
+   kubelet series named that way. Second, `hostNetwork` was reconsidered and
+   deliberately **kept**: the ufw justification is indeed gone, but so is the
+   exposure (the VM is NAT'd, :9100 is unreachable off-box), while turning it
+   off would move the netdev/netclass collectors into the pod's network
+   namespace — `/proc/net` resolves through `/proc/self/net` regardless of the
+   host `/proc` mount — and report the wrong interfaces.
+
+   Verified against a rendered chart that the default alert rules for the
+   disabled monitors drop out with them, so nothing is left firing at a target
+   that will never exist.
 5. **Watchdog CronJob + SOPS secret** replacing the systemd timer.
 6. **`Application` RGD `persistence`.** `/home/lestherll/projects/<app>/data`
    does not exist on Talos (no home dirs, no shell, `type: Directory` can
    never be satisfied imperatively). Change to `DirectoryOrCreate`, constrain
    paths under the bulk mount. **Named casualty:** the host-side CLI workflow
    for personal-finance-dashboard dies; that CLI moves into a container.
+
+   **Built as the PVC redesign** the storage/DX section argues for, not as
+   `DirectoryOrCreate` — that only patched the symptom while leaving a host
+   path in a platform API. `persistence` is now `size`/`tier`/`mountPath`,
+   revision 3 of the RGD, gated with kro's `includeWhen` (confirmed present on
+   the live 0.9.3 CRD). `tier` offers `fast|bulk` only: a disposable tier in a
+   field whose purpose is survival would be an attractive nuisance.
+
+   Two things this needed that the list does not mention: a
+   `persistentvolumeclaims` grant in `rbac-kro-aggregate.yaml` (missing it
+   fails at reconcile, per this repo's own standing rule), and recomputing
+   `claimName` in the Deployment rather than referencing `${dataVolume...}`,
+   because a reference to a conditionally-included resource still has to
+   resolve on instances that exclude it.
+
+   This is the API's **first breaking change** — the removed field was
+   required — which is why it lands with the cutover rather than ahead of it.
 7. **RAPL DaemonSet** (item 3 in the mapping table).
 8. **D16 note (design-only, unbuilt):** the GitHub-OIDC apiserver args
    re-express as `cluster.apiServer.extraArgs` — one line in
@@ -1239,7 +1323,17 @@ When machine #2 arrives: fill in `clusters/homelab-nonprod/`, one
 encrypted backup stored alongside the age key; record it as a second root
 secret next to D12's one.
 
-## Cutover runbook (no second machine = no safety net; verified dumps are the safety net)
+## Cutover runbook (SUPERSEDED — see docs/talos-cutover-runbook.md)
+
+> **Do not follow the runbook below.** It belongs to Alternative A, the
+> bare-metal plan that was not built: it re-images the host, treats "does Talos
+> mount a populated ext4 disk without reformatting" as the central unknown
+> (moot — data moves by dump and restore into new virtual disks), verifies RAPL
+> (impossible in a guest), and retires `bulk_storage` (still needed for the HDD
+> pool). Kept for the reasoning about dumps-as-safety-net, which carried over.
+>
+> The real one is `docs/talos-cutover-runbook.md`, written against the
+> virtualised design and the measured state of the data.
 
 1. **Prep (zero risk).** Land pending branches. Build everything above on
    `feat/talos-migration`. `terraform validate`; generate machine configs.
