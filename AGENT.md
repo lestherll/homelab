@@ -8,7 +8,7 @@ This repo is the declarative source of truth for a single-user homelab platform:
 - `infrastructure/` — Flux-managed Kubernetes manifests (HelmRepositories, HelmReleases, namespaces, SOPS-encrypted secrets), one subdirectory per component:
   - `tailscale-operator/`, `observability/`, `sources/`, `storage/` — platform scaffolding. `storage/` runs three local-path-provisioner instances in one `storage` namespace, backing three classes named for their guarantee — `scratch` (disposable, system disk, Delete), `fast` (durable, low-latency, `/var/mnt/fast`, Retain) and `bulk` (durable, sequential, `/var/mnt/bulk`, Retain). Talos bundles no provisioner, which is what makes per-class disks possible. **No class is default**, so a PVC naming none stays Pending rather than landing somewhere wrong. See `docs/storage-tiering-notes.md` for the tiering rationale.
   - `kro/` — the kro operator (`rbac.mode: aggregation`; its privilege doc is `platform-api/rbac-kro-aggregate.yaml`, extend it when a new kind is added to an RGD).
-  - `platform-api/` — the `Database`/`ObjectStorage`/`Application` `ResourceGraphDefinition`s (`platform.homelab/v1alpha1`), per decision D15.
+  - `platform-api/` — the `Database`/`ObjectStorage`/`Application` `ResourceGraphDefinition`s (`platform.homelab/v1alpha1`), per decision D15. Like `seaweedfs-runtime/`, its **own** Flux Kustomization (`dependsOn: [infrastructure]`) — the RGDs' CRD comes from the kro HelmRelease alongside them, which deadlocks a cold apply if they share a Kustomization.
   - `postgres/` — CloudNativePG operator, backing every `Database` instance.
   - `seaweedfs/` — SeaweedFS operator + HelmRelease.
   - `seaweedfs-runtime/` — the `Seaweed` cluster/`ResourceReferenceGrant`/`PodMonitor`s, deliberately its **own** Flux Kustomization (`dependsOn: [infrastructure]`) — see `docs/self-service-platform-design-notes.md`'s Implementation log for why pairing a HelmRelease with CRD-dependent raw manifests in the same Kustomization deadlocks on cold apply.
@@ -16,7 +16,7 @@ This repo is the declarative source of truth for a single-user homelab platform:
   - `metrics-server/` — metrics-server plus a vendored `kubelet-serving-cert-approver`. Talos bundles neither, and the kubelet self-signs its serving certificate, so `kubectl top` needs both these *and* `rotate-server-certificates` in `terraform/` — any one of the three alone does nothing.
   - `fastapi-echo/`, `personal-finance-dashboard/` — per-app Flux pointer objects (`GitRepository`+`Kustomization`) for apps whose manifests live in their own repos.
 - `terraform/` — VM and cluster lifecycle. `modules/talos-cluster/` builds a libvirt domain + three volumes and bootstraps Talos on it; `clusters/homelab/` instantiates it. Operating manual, including the out-of-band-PKI secrets workflow and the pool-path safety rule, is in `terraform/README.md`.
-- `clusters/homelab/` — Flux's entrypoint Kustomizations, pointing at `infrastructure/` (and, separately, `infrastructure/seaweedfs-runtime/`).
+- `clusters/homelab/` — Flux's entrypoint Kustomizations, pointing at `infrastructure/` (and, separately, `infrastructure/seaweedfs-runtime/` and `infrastructure/platform-api/`).
 - `CONCEPT.md` — the full product concept doc (principles, scope, users, decisions D1–D16). Read this for *why*, not just *what*.
 - `docs/` — supplementary notes:
   - `gitops-onboarding-learnings.md` — what each hand-built app/data-service instance taught, per D1's promotion rule (superseded for `Database`/`ObjectStorage`/`Application` by D15's pivot, noted inline).
