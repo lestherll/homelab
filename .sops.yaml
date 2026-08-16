@@ -9,3 +9,19 @@ creation_rules:
   - path_regex: ansible/inventory/group_vars/.*\.sops\.ya?ml$
     encrypted_regex: ^ntfy_topic$
     age: age1qr7amd9hzgd5eql673nxqt3pdf4c43pjk42dg7lfd9ern7uzrasqtf6gnc
+  # The Talos PKI, generated out of band by
+  # terraform/scripts/gen-talos-secrets.sh. Unlike the two rules above this one
+  # encrypts EVERY value: the whole file is key material — cluster CA keys,
+  # bootstrap token, etcd certs — so there is no legible-diff benefit to trade
+  # against, and a partial rule would leak a root secret to save nothing.
+  #
+  # This file being authoritative is what keeps terraform.tfstate from becoming
+  # a second root secret; see terraform/modules/talos-cluster/talos.tf.
+  - path_regex: terraform/clusters/.*/machine-secrets\.sops\.json$
+    age: age1qr7amd9hzgd5eql673nxqt3pdf4c43pjk42dg7lfd9ern7uzrasqtf6gnc
+  # The same PKI in talosctl's own spelling. Two files rather than one because
+  # neither tool reads the other's shape, and talosctl is the only route to a
+  # talosconfig — without which there is no way into a node that has no shell
+  # and no SSH. Encrypted whole, for the same reason as the rule above.
+  - path_regex: terraform/clusters/.*/talos-secrets\.sops\.ya?ml$
+    age: age1qr7amd9hzgd5eql673nxqt3pdf4c43pjk42dg7lfd9ern7uzrasqtf6gnc

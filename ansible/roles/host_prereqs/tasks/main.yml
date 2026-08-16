@@ -1,6 +1,11 @@
 ---
 # k3s needs ip_forward=1. It does NOT need swapoff, unlike vanilla kubeadm —
 # no swap-related task here on purpose.
+#
+# The filename is now a misnomer and deliberately not renamed: libvirt's NAT
+# network for the Talos VM needs this same sysctl, so the setting outlives k3s.
+# Renaming the drop-in would leave the old file in place still setting it, which
+# is worse than an inaccurate name.
 - name: Enable net.ipv4.ip_forward via sysctl drop-in
   ansible.builtin.copy:
     dest: /etc/sysctl.d/99-k3s.conf
@@ -71,6 +76,110 @@
   when: rapl_udev_rule.changed
   changed_when: true
 
+# --- Hypervisor layer -----------------------------------------------------
+# Ubuntu becomes a hypervisor; Terraform provisions a single Talos VM on top.
+# See docs/talos-terraform-migration-notes.md for why this shape rather than
+# re-imaging the host to bare-metal Talos.
+
+- name: Install hypervisor packages
+  ansible.builtin.apt:
+    name: "{{ hypervisor_packages }}"
+    state: present
+    update_cache: true
+
+- name: Ensure libvirtd is enabled and running
+  ansible.builtin.systemd_service:
+    name: libvirtd
+    enabled: true
+    state: started
+
+# So the operator can run virsh/terraform against the system libvirt URI
+# (qemu:///system) without sudo. Terraform's libvirt provider connects as the
+# invoking user, so without this every apply would need root — and running
+# Terraform as root would put tfstate's permissions somewhere inconvenient.
+#
+# Note this grants effective root: libvirt group members can define a domain
+# that mounts anything. Acceptable on a single-user host where that user
+# already has sudo; recorded so it isn't mistaken for a least-privilege grant.
+- name: Add the operator to the libvirt group
+  ansible.builtin.user:
+    name: "{{ homelab_operator_user }}"
+    groups: libvirt
+    append: true
+
+# The default 'default' network is NAT on 192.168.122.0/24 and autostarts.
+# Left alone rather than deleted — it costs one bridge and removing it is the
+# kind of change that surprises a future virt-install — but the Talos VM gets
+# its own network so its addressing is ours to pin.
+# CAVEAT: `command: define` CREATES but does not UPDATE. If the network already
+# exists, libvirt rejects the redefinition ("network 'talos' already exists with
+# uuid ...") and this task fails rather than converging — so editing the
+# template above is not enough to change a live network. Renumbering is a
+# deliberate two-step:
+#
+#   virsh -c qemu:///system net-destroy talos
+#   virsh -c qemu:///system net-undefine talos
+#   <re-run this role>
+#
+# Left as-is rather than papered over with a force flag: a network change
+# invalidates the DHCP reservation the node depends on and requires the VM to
+# be rebuilt, so failing loudly is the correct behaviour.
+- name: Define the Talos libvirt network
+  community.libvirt.virt_net:
+    name: "{{ libvirt_talos_network_name }}"
+    command: define
+    xml: "{{ lookup('ansible.builtin.template', 'libvirt-network-talos.xml.j2') }}"
+
+- name: Start the Talos libvirt network
+  community.libvirt.virt_net:
+    name: "{{ libvirt_talos_network_name }}"
+    state: active
+
+# Autostart matters more than it looks: §8 assumes unplanned reboots on
+# domestic power, and a VM whose network did not come back is a cluster that
+# did not come back.
+- name: Autostart the Talos libvirt network
+  community.libvirt.virt_net:
+    name: "{{ libvirt_talos_network_name }}"
+    autostart: true
+
+# SSD-backed pool. The HDD-backed pool is deliberately NOT here — it lives in
+# bulk_storage, behind that role's mount assert, because an unmounted
+# /mnt/storage at image-creation time would silently put the bulk image on the
+# SSD. host_prereqs has no business asserting anything about that disk.
+- name: Create the SSD libvirt pool directory
+  ansible.builtin.file:
+    path: "{{ libvirt_ssd_pool_path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0711"
+
+- name: Define the SSD libvirt storage pool
+  community.libvirt.virt_pool:
+    name: "{{ libvirt_ssd_pool_name }}"
+    command: define
+    xml: |
+      <pool type='dir'>
+        <name>{{ libvirt_ssd_pool_name }}</name>
+        <target><path>{{ libvirt_ssd_pool_path }}</path></target>
+      </pool>
+
+- name: Start the SSD libvirt storage pool
+  community.libvirt.virt_pool:
+    name: "{{ libvirt_ssd_pool_name }}"
+    state: active
+
+# Separate task, not folded into the one above: virt_pool honours one action
+# per invocation, so `state: active` + `autostart: true` together silently
+# applies only the state and leaves autostart off. Silently is the problem —
+# there is no warning, and the failure surfaces one host reboot later as an
+# inactive pool and a VM that will not start.
+- name: Autostart the SSD libvirt storage pool
+  community.libvirt.virt_pool:
+    name: "{{ libvirt_ssd_pool_name }}"
+    autostart: true
+
 - name: Ensure ufw is installed
   ansible.builtin.apt:
     name: ufw
@@ -124,6 +233,26 @@
     regexp: '^DEFAULT_FORWARD_POLICY='
     line: 'DEFAULT_FORWARD_POLICY="ACCEPT"'
   notify: reload ufw
+
+# libvirt inserts its own ACCEPT rules for dnsmasq into its LIBVIRT_INP chain,
+# which is jumped to from INPUT ahead of ufw's chains, so these two rules are
+# usually redundant. They are here anyway because "usually" is doing real work
+# in that sentence — rule ordering between ufw and libvirt has changed across
+# releases, and the failure mode (a VM that boots but never gets a lease, so
+# never becomes reachable for apply-config) reads like a Talos problem rather
+# than a firewall one.
+- name: Allow DHCP and DNS from the Talos VM network to the host
+  community.general.ufw:
+    rule: allow
+    interface: "{{ libvirt_talos_network_bridge }}"
+    direction: in
+    port: "{{ item.port }}"
+    proto: "{{ item.proto }}"
+    comment: "libvirt dnsmasq — Talos VM network only"
+  loop:
+    - {port: "53", proto: tcp}
+    - {port: "53", proto: udp}
+    - {port: "67", proto: udp}
 
 # Enabling only after the SSH-allow and forward-policy tasks above, so there's
 # no window where ufw is active without them.

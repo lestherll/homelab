@@ -34,6 +34,25 @@ awscli_sha256_map:
   x86_64: "b665b24dae1ed70bc38ef03998570307a0363839196b564bf04f8d7502132b9a"
 awscli_sha256: "{{ awscli_sha256_map[ansible_facts['architecture']] }}"
 
+# talosctl — the machine-level CLI for the Talos VM that replaces the
+# k3s_server role (see docs/talos-terraform-migration-notes.md). Pinned to the
+# Talos version the cluster itself runs: the two are released together and the
+# client/server skew window is narrow, so treat this as one version, not two.
+# Re-verified against https://github.com/siderolabs/talos/releases as of
+# 2026-08-16: v1.13.8 (2026-08-04), whose DefaultKubernetesVersion is 1.36.2
+# (pkg/machinery/constants/constants.go at that tag). Bumping this pins a new
+# Kubernetes default too — check terraform/ before assuming it's CLI-only.
+talos_version: "1.13.8"
+
+# Terraform owns VM + cluster lifecycle. Deliberately Terraform proper rather
+# than OpenTofu: the state-confidentiality problem that argues for OpenTofu is
+# solved differently here — the Talos PKI is generated out of band with
+# `talosctl gen secrets` and SOPS-encrypted, so tfstate holds a *derived* copy
+# rather than the authoritative one and D12's single root key survives.
+# Re-verified against https://github.com/hashicorp/terraform/releases as of
+# 2026-08-16: v1.15.8 (2026-07-08).
+terraform_version: "1.15.8"
+
 cli_tools_arch_map:
   x86_64: amd64
   aarch64: arm64
