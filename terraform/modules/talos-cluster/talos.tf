@@ -126,6 +126,25 @@ locals {
         # day-one requirement tied to single-node, not something to add when a
         # second machine arrives.
         allowSchedulingOnControlPlanes = true
+
+        # Talos binds kube-proxy's metrics to 127.0.0.1; k3s bound them to all
+        # interfaces. kube-prometheus-stack ships a kube-proxy ServiceMonitor
+        # enabled by default, so on Talos it scrapes the node IP and gets
+        # `connect: connection refused` — one permanently-down target, and
+        # KubeProxyDown/TargetDown firing in Alertmanager forever.
+        #
+        # Exposing the endpoint rather than deleting the ServiceMonitor: the
+        # metrics are real and the alert is correctly telling us they are
+        # unreachable. Silencing the scrape would leave kube-proxy genuinely
+        # unmonitored and hide the next, real, outage of it.
+        #
+        # Safe on this topology — 10.10.0.10 is a host-only libvirt network
+        # reachable from the host and the pod network, not from the LAN.
+        proxy = {
+          extraArgs = {
+            metrics-bind-address = "0.0.0.0"
+          }
+        }
       }
     }),
 
