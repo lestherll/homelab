@@ -1,0 +1,22 @@
+# Terraform state holds a DERIVED copy of the Talos PKI — derived, because the
+# authoritative copy is the SOPS-encrypted machine-secrets.sops.json committed
+# next to each cluster. That is the property that keeps state from being a
+# second root secret (D12), and it is why local state is acceptable here at all.
+#
+# Derived is not harmless, though: an unencrypted state file on disk still
+# contains key material. Never commit it.
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+crash.log
+crash.*.log
+
+# Provider binaries; re-fetched by `terraform init`.
+.terraform/
+
+# The lock file is deliberately NOT ignored — it pins provider checksums, which
+# is the same discipline as the version pins in versions.tf.
+
+# Anything decrypted out of SOPS for a local run.
+*.decrypted.json
+*.auto.tfvars

@@ -1,0 +1,67 @@
+# A shell on the node, for a node that has no shell.
+#
+# Talos has no SSH and no shell, so the local-path debugging that is
+# `sudo ls /var/lib/rancher/k3s/storage/...` under k3s becomes this. The
+# migration notes call this out as a genuine regression for storage debugging
+# specifically — which is where this platform's more interesting failures have
+# historically been — and recommend keeping a manifest in the repo rather than
+# reinventing one under pressure. This is that manifest.
+#
+#   kubectl apply -f terraform/debug-pod.yaml
+#   kubectl -n node-debug exec -it node-debug -- sh
+#   # /host-fast and /host-bulk are the two data tiers
+#   kubectl delete -f terraform/debug-pod.yaml
+#
+# THE NAMESPACE IS LOAD-BEARING. Talos enforces the Pod Security `baseline`
+# profile by default, and baseline forbids hostPath outright — a debug pod in
+# `default` is rejected with "violates PodSecurity baseline:latest: hostPath
+# volumes". Only a namespace labelled `enforce: privileged` can mount them, so
+# the namespace ships with the pod rather than being assumed. Expect a
+# `restricted:latest` warning on apply; it is a warning, not a rejection.
+#
+# Deliberately not left running: it mounts both data tiers read-write and runs
+# as root, so it is a standing hole if forgotten. Delete it when done.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: node-debug
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: node-debug
+  namespace: node-debug
+spec:
+  # Single-node cluster, but pinned anyway: on a second node this would
+  # otherwise land wherever the scheduler chose, and "the disk is empty" is a
+  # confusing way to discover you are on the wrong machine.
+  nodeSelector:
+    kubernetes.io/hostname: talos-cp-01
+  # So the pod schedules even if control-plane taints are reintroduced later.
+  tolerations:
+    - operator: Exists
+  restartPolicy: Never
+  containers:
+    - name: shell
+      image: busybox:1.37
+      command: ["sleep", "3600"]
+      volumeMounts:
+        - name: fast
+          mountPath: /host-fast
+        - name: bulk
+          mountPath: /host-bulk
+  volumes:
+    # /var/mnt/<name> is where Talos mounts user volumes, and the path is
+    # identical on every node by construction — see the storage design in
+    # docs/talos-terraform-migration-notes.md.
+    - name: fast
+      hostPath:
+        path: /var/mnt/fast
+        type: Directory
+    - name: bulk
+      hostPath:
+        path: /var/mnt/bulk
+        type: Directory
