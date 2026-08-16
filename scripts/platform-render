@@ -1,0 +1,302 @@
+#!/usr/bin/env python3
+"""Show the raw Kubernetes objects behind a platform.homelab type.
+
+CONCEPT.md's platform-API-thickness decision requires that layer 2 "render its
+layer 1 output visibly, so any abstraction can be read and forked down into raw
+manifests" — principle 4's escape hatch, made concrete. Nothing implemented that.
+`Application` wires database URIs and S3 keys into a Deployment through
+secretKeyRefs generated several layers down, which is exactly the machinery that
+decision wanted legible rather than magical.
+
+Two subcommands, because the honest answer differs before and after apply:
+
+  preview -f FILE     What the API server makes of an instance you have not
+                      applied yet: schema validation plus every default filled
+                      in, alongside the inventory of resources its RGD declares.
+
+  eject KIND/NAME     The real thing: every object kro actually rendered for a
+                      live instance, cleaned of cluster bookkeeping, as raw
+                      manifests you could commit and maintain by hand.
+
+WHY THERE IS NO OFFLINE FULL RENDER. kro evaluates its CEL and renders in its
+controller, *after* the instance is stored — not in an admission webhook. Checked
+rather than assumed: `kubectl apply --dry-run=server` on an Application returns
+the Application and nothing else, no Deployment, no PVC, no PodMonitor. So a true
+pre-apply render would mean reimplementing kro's evaluator here, and a second
+implementation that drifts from the first is worse than no preview at all.
+`preview` therefore promises only what it can actually deliver, and `eject` is
+where the escape hatch really lives.
+
+Usage:
+  scripts/platform-render preview -f deploy/application.yaml
+  scripts/platform-render eject Application/fastapi-echo -n fastapi-echo
+  scripts/platform-render eject Application/fastapi-echo -n fastapi-echo > raw/
+"""
+
+import argparse
+import json
+import subprocess
+import sys
+
+import yaml
+
+GROUP = "platform.homelab"
+
+# Server-side bookkeeping, stripped so the output is something you could apply.
+# Not cosmetic: the point of ejecting is to get manifests you can maintain by
+# hand, and a paste-back that carries resourceVersion or a stale uid fails.
+DROP_METADATA = {
+    "creationTimestamp",
+    "generation",
+    "managedFields",
+    "resourceVersion",
+    "selfLink",
+    "uid",
+    "ownerReferences",
+}
+
+# kro's own tracking labels. Kept OUT of ejected output on purpose: an ejected
+# manifest is by definition no longer kro's, and leaving kro.run/owned=true on a
+# hand-maintained object invites exactly the confusion this tool exists to end.
+DROP_LABEL_PREFIXES = ("kro.run/", "applyset.kubernetes.io/")
+DROP_LABELS = {"app.kubernetes.io/managed-by"}
+
+DROP_ANNOTATIONS = {
+    "kubectl.kubernetes.io/last-applied-configuration",
+    "kro.run/last-applied",
+}
+
+
+def kubectl(*args, stdin=None, check=True):
+    proc = subprocess.run(
+        ["kubectl", *args],
+        input=stdin,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if check and proc.returncode != 0:
+        sys.stderr.write(proc.stderr)
+        sys.exit(proc.returncode)
+    return proc
+
+
+_RESOURCE_CACHE = {}
+
+
+def resource_for(api_version, kind):
+    """Map (apiVersion, kind) to the plural resource name kubectl wants.
+
+    Asked of the discovery API rather than guessed by appending an "s". The
+    guess works for Deployment and Service and then fails on exactly the kinds
+    this platform is most interested in — `S3Identity` pluralises to
+    `s3identities`, not `s3identitys`, and a tool whose whole job is to be
+    trustworthy about what exists cannot report "no such resource type" for an
+    object that is sitting right there.
+    """
+    if api_version not in _RESOURCE_CACHE:
+        path = f"/apis/{api_version}" if "/" in api_version else f"/api/{api_version}"
+        proc = kubectl("get", "--raw", path, check=False)
+        if proc.returncode != 0:
+            _RESOURCE_CACHE[api_version] = {}
+        else:
+            _RESOURCE_CACHE[api_version] = {
+                entry["kind"]: entry["name"]
+                for entry in json.loads(proc.stdout).get("resources", [])
+                if "/" not in entry["name"]  # skip subresources like pods/status
+            }
+    plural = _RESOURCE_CACHE[api_version].get(kind)
+    if not plural:
+        return None
+    if "/" in api_version:
+        return f"{plural}.{api_version.split('/')[0]}"
+    return plural
+
+
+def rgd_for_kind(kind):
+    """The ResourceGraphDefinition whose schema declares this kind.
+
+    Looked up by schema.kind rather than by a naming convention: the RGD's own
+    metadata.name happens to be the lower-cased kind today, and relying on that
+    would break silently the first time one isn't.
+    """
+    out = kubectl("get", "resourcegraphdefinitions", "-o", "json").stdout
+    for item in json.loads(out)["items"]:
+        schema = item.get("spec", {}).get("schema", {})
+        if schema.get("kind") == kind and schema.get("group") == GROUP:
+            return item
+    sys.exit(f"no ResourceGraphDefinition defines {GROUP}/{kind}")
+
+
+def declared_resources(rgd):
+    """(node id, apiVersion, kind, includeWhen) for each resource the RGD renders.
+
+    externalRef entries are skipped — they are lookups of objects this instance
+    reads but does not own, so they render nothing and ejecting them would hand
+    back somebody else's manifest.
+    """
+    out = []
+    for res in rgd.get("spec", {}).get("resources", []):
+        template = res.get("template")
+        if not template:
+            continue
+        out.append(
+            (
+                res.get("id", "?"),
+                template.get("apiVersion", ""),
+                template.get("kind", ""),
+                res.get("includeWhen"),
+            )
+        )
+    return out
+
+
+def clean(obj):
+    obj.pop("status", None)
+    meta = obj.get("metadata", {})
+    for key in DROP_METADATA:
+        meta.pop(key, None)
+
+    labels = {
+        k: v
+        for k, v in meta.get("labels", {}).items()
+        if k not in DROP_LABELS and not k.startswith(DROP_LABEL_PREFIXES)
+    }
+    if labels:
+        meta["labels"] = labels
+    else:
+        meta.pop("labels", None)
+
+    annotations = {
+        k: v for k, v in meta.get("annotations", {}).items() if k not in DROP_ANNOTATIONS
+    }
+    if annotations:
+        meta["annotations"] = annotations
+    else:
+        meta.pop("annotations", None)
+
+    # A Service's clusterIP is assigned by the cluster, not requested — carrying
+    # it into a manifest makes that manifest un-appliable anywhere else.
+    spec = obj.get("spec", {})
+    if obj.get("kind") == "Service":
+        spec.pop("clusterIP", None)
+        spec.pop("clusterIPs", None)
+    return obj
+
+
+def cmd_eject(args):
+    kind, _, name = args.target.partition("/")
+    if not name:
+        sys.exit("target must be KIND/NAME, e.g. Application/fastapi-echo")
+
+    rgd = rgd_for_kind(kind)
+    selector = (
+        f"kro.run/instance-kind={kind},"
+        f"kro.run/instance-name={name},"
+        f"kro.run/instance-namespace={args.namespace}"
+    )
+
+    print(f"# Raw manifests behind {GROUP}/{kind} {args.namespace}/{name}.")
+    print(f"# Rendered by kro from ResourceGraphDefinition/{rgd['metadata']['name']};")
+    print("# ejected and cleaned of cluster bookkeeping, so this is appliable as-is.")
+    print("#")
+    print("# Applying this WITHOUT deleting the instance first means two owners for")
+    print("# the same objects, and kro will revert your edits. Ejecting is for")
+    print("# reading, or for leaving the abstraction behind entirely.")
+
+    found = 0
+    for node_id, api_version, kind_name, _ in declared_resources(rgd):
+        resource = resource_for(api_version, kind_name)
+        if resource is None:
+            print(f"\n# --- {node_id} ({kind_name}): {api_version} is not served by this cluster")
+            continue
+        proc = kubectl(
+            "get", resource, "-n", args.namespace, "-l", f"{selector},kro.run/node-id={node_id}",
+            "-o", "json", check=False,
+        )
+        if proc.returncode != 0:
+            print(f"\n# --- {node_id} ({kind_name}): could not query — {proc.stderr.strip()}")
+            continue
+        items = json.loads(proc.stdout).get("items", [])
+        if not items:
+            # Expected for a resource behind an unmet includeWhen — say so
+            # rather than silently omitting it, since "why is there no PVC?" is
+            # exactly the question this tool exists to answer.
+            print(f"\n# --- {node_id} ({kind_name}): not rendered for this instance")
+            continue
+        for item in items:
+            found += 1
+            print(f"\n# --- {node_id} ({kind_name}) ---")
+            print("---")
+            print(yaml.safe_dump(clean(item), sort_keys=False, default_flow_style=False), end="")
+
+    if not found:
+        sys.exit(f"\n# nothing found — is {kind}/{name} live in namespace {args.namespace}?")
+
+
+def cmd_preview(args):
+    with open(args.filename) as handle:
+        docs = [d for d in yaml.safe_load_all(handle) if d]
+
+    for doc in docs:
+        kind = doc.get("kind", "")
+        if doc.get("apiVersion", "").split("/")[0] != GROUP:
+            continue
+
+        proc = kubectl(
+            "apply", "--dry-run=server", "-f", "-", "-o", "json",
+            stdin=yaml.safe_dump(doc),
+            check=False,
+        )
+        if proc.returncode != 0:
+            print(f"REJECTED — {kind}/{doc.get('metadata', {}).get('name')}")
+            print(proc.stderr.strip())
+            continue
+
+        applied = json.loads(proc.stdout)
+        name = applied["metadata"]["name"]
+        print(f"# {kind}/{name} — accepted by the API server.")
+        print("#")
+        print("# Effective spec, with every default the schema applies filled in.")
+        print("# Read this: it is where you find the fields you did not set but got")
+        print("# anyway, and the CPU/memory limits your t-shirt size actually means.")
+        print(yaml.safe_dump({"spec": applied["spec"]}, sort_keys=False), end="")
+
+        rgd = rgd_for_kind(kind)
+        print(f"\n# Resources ResourceGraphDefinition/{rgd['metadata']['name']} declares:")
+        for node_id, api_version, kind_name, include_when in declared_resources(rgd):
+            note = ""
+            if include_when:
+                # Printed, not evaluated. Evaluating kro's CEL here would mean a
+                # second implementation of its semantics, and a preview that
+                # disagrees with the controller is worse than one that admits
+                # what it does not know.
+                note = f"   # only when: {' '.join(str(c) for c in include_when)}"
+            print(f"#   {kind_name:<24} ({node_id}){note}")
+        print("#")
+        print("# Names and field values above are NOT computed here — kro renders")
+        print("# in-cluster after apply. `eject` shows what was really produced.")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="platform-render",
+        description="Show the raw Kubernetes objects behind a platform.homelab type.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_preview = sub.add_parser("preview", help="validate an unapplied instance and show its effective spec")
+    p_preview.add_argument("-f", "--filename", required=True)
+    p_preview.set_defaults(func=cmd_preview)
+
+    p_eject = sub.add_parser("eject", help="dump the raw objects kro rendered for a live instance")
+    p_eject.add_argument("target", help="KIND/NAME, e.g. Application/fastapi-echo")
+    p_eject.add_argument("-n", "--namespace", required=True)
+    p_eject.set_defaults(func=cmd_eject)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

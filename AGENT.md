@@ -15,6 +15,7 @@ This repo is the declarative source of truth for a single-user homelab platform:
   - `victoria-metrics/` — VictoriaMetrics single-node, the long-term store for power/energy history. Runs in the `observability` namespace and receives a **filtered** `remoteWrite` from Prometheus (`node_rapl_*` only). Exists because Prometheus retention is global — there is no per-series routing, so keeping five series for years without keeping all ~64k would be impossible in one TSDB. Its PVC is on the `bulk` tier; see `docs/storage-tiering-notes.md`.
   - `metrics-server/` — metrics-server plus a vendored `kubelet-serving-cert-approver`. Talos bundles neither, and the kubelet self-signs its serving certificate, so `kubectl top` needs both these *and* `rotate-server-certificates` in `terraform/` — any one of the three alone does nothing.
   - `fastapi-echo/`, `personal-finance-dashboard/` — per-app Flux pointer objects (`GitRepository`+`Kustomization`) for apps whose manifests live in their own repos.
+- `scripts/` — operator tools that are not part of any deployed artifact. Currently one: `platform-render`, which shows the raw Kubernetes objects behind a `platform.homelab` type — `preview` for an unapplied instance (schema validation plus every default filled in), `eject` for a live one (every object kro rendered, cleaned into appliable manifests). This is CONCEPT.md's "layer 2 renders its layer 1 output visibly" requirement made real; see `docs/platform-api-usage.md`.
 - `terraform/` — VM and cluster lifecycle. `modules/talos-cluster/` builds a libvirt domain + three volumes and bootstraps Talos on it; `clusters/homelab/` instantiates it. Operating manual, including the out-of-band-PKI secrets workflow and the pool-path safety rule, is in `terraform/README.md`.
 - `clusters/homelab/` — Flux's entrypoint Kustomizations, pointing at `infrastructure/` (and, separately, `infrastructure/seaweedfs-runtime/` and `infrastructure/platform-api/`).
 - `CONCEPT.md` — the full product concept doc (principles, scope, users, decisions D1–D16). Read this for *why*, not just *what*.
@@ -50,6 +51,7 @@ This repo is the declarative source of truth for a single-user homelab platform:
 - Cluster access: `kubectl` via `~/.kube/config`. The kubeconfig is produced by Terraform from the Talos PKI — see `terraform/README.md` for the regeneration command; it is not written by any Ansible role.
 - Node access: `talosctl` (no SSH, no shell on the node). A pod that needs to look at a volume directly is `terraform/debug-pod.yaml`.
 - Editing an encrypted secret: `sops infrastructure/<path>/<name>.sops.yaml`.
+- Reading what a platform-API type renders: `scripts/platform-render eject Application/<name> -n <ns>` (or `preview -f <file>` before applying). Note kro renders in its controller, not in admission, so `kubectl apply --dry-run=server` on an instance shows the instance and nothing downstream — that is the gap this script fills.
 
 ## Notes
 - Verify idempotency after Ansible role changes by re-running the same `--tags` and checking for `changed=0` in the recap before assuming a fix is "live."
