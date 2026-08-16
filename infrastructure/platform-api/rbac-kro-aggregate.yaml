@@ -51,8 +51,12 @@ rules:
   - apiGroups: ["postgresql.cnpg.io"]
     resources: ["clusters"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # podmonitors: rendered by BOTH the Database RGD (the CNPG exporter) and, as
+  # of Application revision 4, by any Application that sets spec.metrics.
+  # prometheusrules: rendered by every Application unconditionally — the
+  # delivery-level alerts that need no cooperation from the app itself.
   - apiGroups: ["monitoring.coreos.com"]
-    resources: ["podmonitors"]
+    resources: ["podmonitors", "prometheusrules"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
   # Rendered by the ObjectStorage RGD (Bucket) and the Application RGD's
