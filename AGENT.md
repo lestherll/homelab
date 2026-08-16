@@ -23,6 +23,7 @@ This repo is the declarative source of truth for a single-user homelab platform:
   - `message-broker-design-notes.md` — exploratory notes on a future message-broker data service; not built, not scheduled.
   - `storage-tiering-notes.md` — the two-disk layout, which state belongs on the SSD vs the spinning disk, why the bulk tier is a second provisioner rather than a reconfigured one, and the outstanding SeaweedFS migration.
   - `external-consumer-access-notes.md` — investigation into letting apps hosted *off* the platform consume `Database`/`ObjectStorage` over the tailnet. Nothing built; records what was verified on the live cluster (kro can express a polymorphic `ServiceBinding`; SigV4 works over the tailnet) and the constraints any such design inherits.
+  - `talos-terraform-migration-notes.md` — viability assessment + design notes for moving off Ansible/k3s: Ubuntu stays on the metal as a hypervisor, Terraform provisions a single Talos VM, Flux is unchanged (bare-metal Talos is retained as Alternative A). Nothing built; records the coupling audit, the Ansible→Talos mapping, the hardware-agnostic storage/DX design, the forced `infrastructure/` changes, and the cutover runbook.
 
 ## Key operational facts
 - **Ansible privilege escalation is broken on this host.** Ubuntu 26.04's `sudo-rs` doesn't match Ansible's become-prompt regex (see the comment block in `ansible.cfg`). Always invoke playbooks wrapped in a top-level `sudo`, not `-K`:
