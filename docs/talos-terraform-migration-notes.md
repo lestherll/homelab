@@ -719,10 +719,15 @@ primitive, which is what makes cold-apply testing routine.
 
 ### Still to do
 
-- **Phase 3 onward.** Nothing has been pointed at Flux yet; the cluster is
-  empty beyond its own control plane. `infrastructure/` still needs the forced
-  changes listed under Alternative A (own SSD provisioner, storage-class
-  renames, metrics-server, observability cleanup) before it can reconcile here.
+- **Phase 3 is written, not run.** Nothing has been pointed at Flux yet; the
+  cluster is still empty beyond its own control plane. Of the forced changes
+  listed under Alternative A, the storage rewrite, the class renames,
+  metrics-server, the observability cleanup and the `Application.persistence`
+  PVC are **built** — see the status note on that list, which also records
+  where the built shape differs from what was predicted. None of it has
+  reconciled anywhere, because none of it can until k3s stops.
+- **The watchdog (forced change #5) is the one still unbuilt** that is not
+  deferred by decision.
 - **Re-run the Ansible converge** to confirm idempotency (`changed=0`) and to
   apply the pool-autostart fix, which was corrected in the role after the
   network and pools were already created by hand.
