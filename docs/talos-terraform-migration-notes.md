@@ -57,9 +57,26 @@ Four forks were put to the operator; the answers shape everything below:
    cluster — D3's reversal clause made concrete. Control plane on both nodes of
    a 2-node cluster was considered and rejected (etcd wants odd quorum; 2 CPs
    is strictly worse than 1).
-3. **Power metrics:** keep. The RAPL udev+GID-600 mechanism is not expressible
-   in Talos machine config, so a small privileged DaemonSet workaround ships
-   with the migration.
+3. ~~**Power metrics:** keep.~~ **Relaxed 2026-08-16: deferred, and accepted as
+   dark for a while.** Host-level metrics are not a priority relative to getting
+   the cluster onto Talos, so the observability relocation moves *off* the
+   migration's critical path and becomes follow-up work. What this costs, stated
+   plainly so it is not discovered later:
+   - **Power dashboards go blank at cutover.** There is no `/sys/class/powercap`
+     in a KVM guest, so a DaemonSet node-exporter cannot read RAPL at all — and
+     unlike the bare-metal case, no privileged-DaemonSet workaround helps.
+   - **The remaining node series silently change meaning**, describing the VM
+     rather than the machine — disk, network, CPU, memory. The blank dashboards
+     are the visible failure; this is the quiet one, and it is why the
+     relocation is follow-up work rather than optional work.
+   - It also devalues copying VictoriaMetrics' power history out (locked-in
+     answer #4): an archive that stops being appended to is worth less than one
+     that continues. Copy it only if the history itself has value.
+
+   The relocation design in *The finding that reshapes observability* below
+   stands unchanged — it is deferred, not rejected. Nothing about running
+   node-exporter on the host later is made harder by starting with the
+   DaemonSet.
 4. ~~**Data safety:** one-shot hand migration (pg_dump / s3 sync / rsync)~~
    **Superseded 2026-08-16: the migration is greenfield.** Everything on the
    current cluster is PoC/experimentation data and is explicitly not worth
@@ -482,23 +499,18 @@ memory; guest-agent graceful shutdown; VM autostart across a host reboot.
 Reading- and experiment-led; each phase exists to answer questions, and has an
 exit criterion. Nothing before Phase 4 touches the live cluster.
 
-**Phase 0 — Read, plus one experiment on the live cluster.** Work the reading
-list below. Q1 and Q7 are already answered above; Q6, Q11 and Q16 are the
-remainder.
+**Phase 0 — Decide (no changes).** Work the reading list below and settle the
+six items under [Prerequisites to start](#prerequisites-to-start). Q1 and Q7 are
+already answered above; Q6 and Q11 are the remainder that still gate design.
 
-Phase 0 also gets the one experiment that needs **no Talos work at all** and
-returns the most information per hour: **stand up node-exporter on the Ubuntu
-host now, add it to the live Prometheus as a second scrape target, and find out
-which stock kube-prometheus-stack rules and dashboards go blank** (Q18). This is
-the migration's most likely source of *silent* breakage — every other major risk
-fails loudly and has a phase that catches it, whereas this one fails by a panel
-quietly showing nothing. It is testable today against k3s, it is reversible, and
-the relabelling it forces is work the migration needs regardless of whether the
-migration ever happens. Pull it forward.
+The host node-exporter experiment that previously lived here is **deferred with
+the observability relocation** (locked-in answer #3). It remains the best
+single experiment available and needs no Talos work — pick it up whenever host
+metrics become a priority again, before or after cutover; it is independent of
+everything else in this plan.
 
-Exit: Q6, Q11, Q16 answered; the rest at least scoped; **Q18 quantified — a
-concrete list of the rules and dashboards that need relabelling, not an
-estimate.**
+Exit: the six prerequisite decisions made; Q6 and Q11 answered; the rest at
+least scoped.
 
 **Phase 1 — Hand-built sandbox VM.** Install libvirt/KVM on the host. Boot a
 throwaway Talos VM by hand with `talosctl`, no Terraform yet. Deliberately
@@ -551,16 +563,16 @@ hostnames are free. Expect ~4 fresh Let's Encrypt issuances and prune the stale
 risk per `external-consumer-access-notes.md`.
 
 Observability comes up last because it is the memory hog and the thing least
-needed while everything else is being proven. Note the window without in-cluster
-metrics is well covered: **node-exporter, the RAPL power metrics and the
-heartbeat watchdog all live on the Ubuntu host**, outside both clusters, and run
-straight through. Host health, power and the dead-man's switch never go dark.
-The host-side relocation was adopted to fix measurement correctness; that it
-also covers the cutover window is a second thing it buys.
+needed while everything else is being proven. It comes up **as-is** — the
+DaemonSet node-exporter, unrelocated — per the deferral in locked-in answer #3.
+Expect `node_scrape_collector_success{collector="rapl"} 0` and blank power
+dashboards on the far side; that is the accepted cost, not a bug to chase.
+The heartbeat watchdog still lives on the host and runs straight through, so
+the dead-man's switch never goes dark.
 
 Exit: `infrastructure/` fully reconciled on Talos; all four ingresses serving
-TLS; `node_scrape_collector_success{collector="rapl"} == 1` off the *host*
-exporter; power dashboards live; Q18's relabelling holding in practice.
+TLS; every workload healthy; power metrics known-dark and recorded as such
+rather than silently broken.
 
 **Phase 4 — Verify and live on it.** Recreate the `Database`/`ObjectStorage`/
 `Application` instances for the app repos — empty, no restore, since the
@@ -585,17 +597,19 @@ steadily more expensive as SeaweedFS and VictoriaMetrics accumulate history.
 Ranked, 2026-08-16. The list has been through two reorderings in one day, which
 is itself the useful record — see the demotions at the end.
 
-1. **Q18, the node-exporter relabelling.** Now the top risk, and the only major
-   one that fails *silently* — a panel quietly showing nothing rather than an
-   error. Pulled forward into Phase 0 for exactly that reason; it needs no Talos
-   work and is testable today.
-2. **RAPL absence in the guest.** Load-bearing for the whole observability
-   redesign and still only asserted by this document. Cheap to verify; do it
-   first within Phase 1.
-3. **The libvirt provider's 0.9 rewrite.** Real but bounded — pinning plus
-   Phase 2 is the mitigation, and Q1's fallbacks exist if it disappoints.
-4. **Two layers to debug.** Not a discrete risk, a standing tax. Named because
+1. **The libvirt provider's 0.9 rewrite.** Now the top risk on the critical
+   path — bounded, but the plan depends on it. Pinning plus Phase 2 is the
+   mitigation, and Q1's fallbacks exist if it disappoints.
+2. **The disk-serial → CEL join.** The whole hardware-agnostic storage design
+   rests on it and it is asserted rather than verified. Cheap; Phase 1.
+3. **Two layers to debug.** Not a discrete risk, a standing tax. Named because
    it is the cost that does not go away after cutover.
+
+**Off the critical path, not gone:** Q18's node-exporter relabelling was ranked
+first here until the observability relocation was deferred. It is still the only
+identified risk that fails *silently*, and it still has to be paid — the
+deferral moves it after cutover rather than removing it. Re-rank it back to the
+top the moment host metrics become a priority.
 
 **Demoted — and worth recording why, since both were once called the single
 biggest unknown:**
