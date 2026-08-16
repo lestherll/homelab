@@ -177,25 +177,60 @@ spec:
         requests: { cpu: 100m, memory: 384Mi }
         limits: { cpu: 300m, memory: 768Mi }
 
+    # Control-plane component monitors: all off. On k3s these never scraped
+    # anything — no kube-system services for them exist, so the jobs had no
+    # targets and the series arrived (and were dropped) via the kubelet's
+    # combined registry instead. On Talos they CANNOT scrape anything: Talos
+    # serves etcd/scheduler/controller-manager metrics behind its own PKI,
+    # not reachable with in-cluster credentials. Nothing is lost either way —
+    # no rule or dashboard here joins on those jobs.
+    kubeEtcd:
+      enabled: false
+    kubeControllerManager:
+      enabled: false
+    kubeScheduler:
+      enabled: false
+
     kube-state-metrics:
       resources:
         requests: { cpu: 10m, memory: 32Mi }
         limits: { cpu: 50m, memory: 64Mi }
 
     prometheus-node-exporter:
-      # Already the chart's defaults — set explicitly for documentation. Same
-      # technique the current podman setup uses (network_mode: host, pid: host,
-      # --path.rootfs=/host), just re-expressed as a k8s DaemonSet: no loss of
-      # fidelity, since it reads host-mounted /proc,/sys,/ directly. The
-      # regression this introduces (binds 0.0.0.0:9100 instead of the tailnet
-      # IP only) is fixed at the host firewall level — see host_prereqs's ufw
-      # rule, not here.
+      # Both are the chart's defaults, set explicitly for documentation.
+      #
+      # hostNetwork was RECONSIDERED at the Talos cutover and deliberately KEPT.
+      # Its old justification is indeed gone: it used to bind 0.0.0.0:9100 on
+      # the bare-metal host, a regression that host_prereqs's ufw rule fenced
+      # off. There is no ufw inside the guest. But the exposure it was fencing
+      # is gone too — the VM sits on a NAT'd libvirt network with no inbound
+      # route from anywhere but the host, so :9100 is not reachable off-box at
+      # all.
+      #
+      # Turning it off was the alternative and was rejected as an unforced risk:
+      # /proc/net is per-network-namespace (it resolves through /proc/self/net
+      # regardless of the host /proc bind mount), so a non-hostNetwork
+      # node-exporter reports the POD's interfaces rather than the node's, and
+      # the netdev/netclass collectors — precisely the ones the 500m limit below
+      # was sized for — would silently start describing the wrong netns. Losing
+      # network metrics to buy back a port that is already unreachable is a bad
+      # trade.
+      #
+      # NOTE: what this DaemonSet now calls "the host" is the VM, not the
+      # metal. Everything below /host is the guest's view.
       hostNetwork: true
       hostPID: true
       # CPU limit raised 50m -> 500m, 2026-08-12. The 50m above was the chart's
       # default, adopted here "for documentation" without ever being measured
-      # against this host — and this host has ~20 network interfaces (veths,
+      # against this host — and that host had ~20 network interfaces (veths,
       # cni0, flannel.1, tailscale0) for the netclass collector to walk.
+      #
+      # That interface count is a guest-side question after cutover: tailscale0
+      # stays on the metal (Tailscale is host-only by decision) and the bridge
+      # is different, so the walk is probably cheaper. 500m is kept as the safe
+      # direction to be wrong in — over-provisioning a 6%-of-box limit costs
+      # nothing, and the failure mode below is what under-provisioning looks
+      # like. Re-measure before trimming it.
       #
       # At 50m the container got a 5% duty cycle and was throttled in 85.5% of
       # its CFS periods. A ~194ms scrape (3.87s wall x 0.05 duty) stretched to
@@ -216,6 +251,15 @@ spec:
       resources:
         requests: { cpu: 10m, memory: 16Mi }
         limits: { cpu: 500m, memory: 32Mi }
+      # INERT AFTER CUTOVER, and kept deliberately. /sys/class/powercap exists
+      # inside the guest but is EMPTY — verified 2026-08-16 against the running
+      # Talos VM, where the host has intel-rapl:0/:1 plus subzones. RAPL is not
+      # virtualised, so no supplementary group can rescue it and
+      # node_scrape_collector_success{collector="rapl"} will read 0. That is
+      # accepted, not a bug to chase: relocating node-exporter to the metal is
+      # LES-97, deferred by decision, and this key is what LES-97 needs back.
+      # Do not "clean it up" in the meantime.
+      #
       # Lets the rapl collector read /sys/class/powercap/intel-rapl:*/energy_uj
       # for host power metrics. That file is 0400 root:root (the kernel's
       # CVE-2020-8694/PLATYPUS mitigation), so as uid 65534 the collector was
@@ -256,30 +300,31 @@ spec:
         # diagnose Grafana OOMKills. If a future OOM investigation comes up
         # short on resolution, this is the line to revisit.
         cAdvisorInterval: 30s
-        # k3s runs the apiserver, controller-manager, scheduler and kubelet in
-        # ONE process sharing one Prometheus registry, so the kubelet's
-        # :10250/metrics endpoint serves that whole registry — including every
-        # apiserver_* and etcd_* metric. They are therefore stored twice: once
-        # under job="apiserver", and again under job="kubelet".
+        # The `(apiserver|etcd)_.*` drop that used to sit here is GONE, and it
+        # must not be reinstated on Talos. It existed because k3s ran the
+        # apiserver, controller-manager, scheduler and kubelet in ONE process
+        # sharing one Prometheus registry, so the kubelet's :10250/metrics
+        # served that whole registry and every apiserver_*/etcd_* series was
+        # stored twice — once under job="apiserver" and again under
+        # job="kubelet". Measured 2026-08-12: 79,694 of 148,366 total series
+        # came from job="kubelet", and only 4,906 of those were genuinely
+        # kubelet/container metrics. Dropping the other ~69,000 (47% of the
+        # TSDB) cost nothing, because job="apiserver" still had them.
         #
-        # Measured 2026-08-12 before this drop: 148,366 series total, of which
-        # job="kubelet" was 79,694 — and only 4,906 of those were genuine
-        # kubelet/container metrics. The other ~69,000 (47% of the entire TSDB)
-        # were duplicated apiserver/etcd series. A kubelet exposing
-        # etcd_request_duration_seconds_bucket is the tell; it has no etcd
-        # client. This is a k3s artifact, not a kube-prometheus-stack default —
-        # the chart's own drops for this endpoint assume a standalone kubelet.
+        # Talos runs those components as separate static pods with separate
+        # registries, so a Talos kubelet exposes only kubelet metrics. The same
+        # regex here would now drop nothing on a good day — and on a bad one it
+        # is a live footgun, because it is written against __name__ alone: the
+        # moment a genuine kubelet series is named apiserver_*/etcd_* it
+        # disappears with no second copy anywhere.
         #
-        # Dropping them loses no information: the same series remain under
-        # job="apiserver", which is what every default rule and dashboard
-        # queries. workqueue_* is deliberately NOT dropped — a kubelet has real
-        # workqueues of its own, and at ~2k series it isn't worth the ambiguity.
+        # Expect the series count to look very different after cutover. The 15d
+        # retention and the 8GiB retentionSize above were both sized against the
+        # post-drop k3s TSDB; re-measure before trusting either.
         metricRelabelings:
           # Chart default for this endpoint, preserved — setting this key
-          # replaces the list rather than appending to it.
+          # replaces the list rather than appending to it, so dropping the k3s
+          # entry above meant keeping this one explicitly.
           - action: drop
             sourceLabels: [__name__, le]
             regex: (csi_operations|storage_operation_duration)_seconds_bucket;(0.25|2.5|15|25|120|600)(\.0)?
-          - action: drop
-            sourceLabels: [__name__]
-            regex: (apiserver|etcd)_.*

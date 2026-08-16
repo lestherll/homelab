@@ -27,11 +27,22 @@ spec:
         name: metrics-server
         namespace: flux-system
   values:
-    # Chart-default args, deliberately. Talos signs kubelet serving certs from
-    # the cluster CA, so the default cert validation should just work and
-    # --kubelet-insecure-tls should NOT be needed. Unverified until cutover —
-    # if `kubectl top` then shows x509 errors against the kubelet, that flag is
-    # the fix, and this comment is wrong.
+    # Chart-default args, deliberately — and specifically NO
+    # --kubelet-insecure-tls. That works only because two other pieces are in
+    # place, and it is worth knowing both before touching this:
+    #
+    #   1. `rotate-server-certificates` on the kubelet
+    #      (terraform/modules/talos-cluster/talos.tf), so the kubelet asks the
+    #      cluster CA for its serving cert instead of self-signing.
+    #   2. kubelet-serving-cert-approver, alongside this release, because
+    #      kube-controller-manager will not auto-approve those CSRs.
+    #
+    # A Talos kubelet self-signs by default, so without BOTH of those the
+    # scrape fails x509 validation, `kubectl top` reports "metrics not
+    # available", and the actual reason appears only in the metrics-server log.
+    # Reaching for --kubelet-insecure-tls at that point would paper over a
+    # half-applied change — check for a Pending CSR
+    # (`kubectl get csr | grep kubelet-serving`) first.
     #
     # Requests are upstream's documented floor for small clusters; usage scales
     # with node+pod count, which a single-node homelab flattens to a constant.

@@ -69,6 +69,32 @@ locals {
         # failure that can never clear.
         certSANs = [var.node_ip]
 
+        # Required by metrics-server (infrastructure/metrics-server/), and it
+        # is a two-part change like the RAPL group was — this half alone does
+        # nothing. By default a Talos kubelet serves a SELF-SIGNED certificate
+        # on :10250, so metrics-server's scrape fails x509 validation and
+        # `kubectl top` returns "metrics not available" with the reason visible
+        # only in the metrics-server log. This flag makes the kubelet request a
+        # serving cert from the cluster CA instead.
+        #
+        # The other half is the kubelet-serving-cert-approver deployed
+        # alongside metrics-server: kube-controller-manager's built-in CSR
+        # approver deliberately does NOT auto-approve kubernetes.io/kubelet-
+        # serving CSRs, so without it the CSR sits Pending forever and the
+        # kubelet keeps serving its self-signed cert — same symptom as not
+        # setting this at all. Both halves or neither.
+        #
+        # This is the path Talos documents. The alternative,
+        # metrics-server's --kubelet-insecure-tls, was rejected: it is
+        # defensible on a single node where the scrape never leaves the box,
+        # but D3 plans a second machine, and that is exactly when a disabled
+        # TLS check stops being local and nobody remembers it is set.
+        kubelet = {
+          extraArgs = {
+            rotate-server-certificates = "true"
+          }
+        }
+
         network = {
           # Matched by MAC rather than by interface name. Talos does in fact
           # name this `eth0` (verified on the running node), so `interface:

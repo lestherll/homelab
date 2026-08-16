@@ -2,4 +2,8 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - namespace.yaml
+  # Ships with metrics-server rather than in its own component: it exists only
+  # to make metrics-server's kubelet scrape validate, has no other consumer,
+  # and retires the day metrics-server does.
+  - kubelet-serving-cert-approver.yaml
   - helmrelease.yaml
