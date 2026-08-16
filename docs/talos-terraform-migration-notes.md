@@ -1323,7 +1323,17 @@ When machine #2 arrives: fill in `clusters/homelab-nonprod/`, one
 encrypted backup stored alongside the age key; record it as a second root
 secret next to D12's one.
 
-## Cutover runbook (no second machine = no safety net; verified dumps are the safety net)
+## Cutover runbook (SUPERSEDED — see docs/talos-cutover-runbook.md)
+
+> **Do not follow the runbook below.** It belongs to Alternative A, the
+> bare-metal plan that was not built: it re-images the host, treats "does Talos
+> mount a populated ext4 disk without reformatting" as the central unknown
+> (moot — data moves by dump and restore into new virtual disks), verifies RAPL
+> (impossible in a guest), and retires `bulk_storage` (still needed for the HDD
+> pool). Kept for the reasoning about dumps-as-safety-net, which carried over.
+>
+> The real one is `docs/talos-cutover-runbook.md`, written against the
+> virtualised design and the measured state of the data.
 
 1. **Prep (zero risk).** Land pending branches. Build everything above on
    `feat/talos-migration`. `terraform validate`; generate machine configs.
