@@ -1,6 +1,26 @@
 ---
-# kubectl deliberately not installed here — it comes from k3s's own symlink
-# (k3s_server role), so there is nothing to do for it in this role.
+# --- kubectl: pinned upstream release binary, checksum-verified ------------
+# Pinned to the cluster's own minor rather than latest-stable: kubectl supports
+# one minor of skew either way, so tracking the control plane keeps it inside
+# that window by construction.
+
+- name: Check installed kubectl version
+  ansible.builtin.command: kubectl version --client
+  register: kubectl_installed
+  changed_when: false
+  failed_when: false
+
+- name: Determine whether kubectl needs (re)install
+  ansible.builtin.set_fact:
+    kubectl_needs_install: "{{ ('v' + kubectl_version) not in (kubectl_installed.stdout | default('')) }}"
+
+- name: Download and checksum-verify kubectl binary
+  ansible.builtin.get_url:
+    url: "https://dl.k8s.io/release/v{{ kubectl_version }}/bin/linux/{{ cli_tools_arch }}/kubectl"
+    dest: "{{ cli_tools_install_dir }}/kubectl"
+    checksum: "sha256:https://dl.k8s.io/release/v{{ kubectl_version }}/bin/linux/{{ cli_tools_arch }}/kubectl.sha256"
+    mode: "0755"
+  when: kubectl_needs_install
 
 - name: Install age via apt
   ansible.builtin.apt:
@@ -189,10 +209,10 @@
   changed_when: true
 
 # --- talosctl: pinned GitHub release binary, checksum-verified -------------
-# Machine-level CLI for the Talos VM. Note this is the *only* tool in this role
-# that is not about talking to Kubernetes or its data services — it talks to
-# the machine underneath, over Talos's API on :50000, and it is what replaces
-# `ssh` on a node that has no shell.
+# Machine-level CLI for the node. The *only* tool in this role that is not
+# about talking to Kubernetes or its data services — it talks to the machine
+# underneath, over Talos's API on :50000, and it is what replaces `ssh` on a
+# node that has no shell.
 
 - name: Check installed talosctl version
   ansible.builtin.command: talosctl version --client

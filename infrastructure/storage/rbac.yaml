@@ -3,9 +3,9 @@
 # privilege each needs is identical, and local-path-provisioner has no
 # per-instance authorization model to exploit even if they were split.
 #
-# Deliberately a faithful copy of the privilege set k3s granted its own
-# local-path-provisioner, rather than a hand-tightened variant. The provisioner
-# drives a helper pod to mkdir/rm on the node, and the exact verb set it needs
+# Deliberately upstream's own privilege set for local-path-provisioner, rather
+# than a hand-tightened variant. The provisioner drives a helper pod to
+# mkdir/rm on the node, and the exact verb set it needs
 # across pods/pods-log/endpoints is an upstream implementation detail that has
 # changed between releases — a tighter guess here fails at provision time, in a
 # path that only runs when a new PVC is created.

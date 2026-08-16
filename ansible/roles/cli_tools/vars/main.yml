@@ -34,9 +34,15 @@ awscli_sha256_map:
   x86_64: "b665b24dae1ed70bc38ef03998570307a0363839196b564bf04f8d7502132b9a"
 awscli_sha256: "{{ awscli_sha256_map[ansible_facts['architecture']] }}"
 
-# talosctl — the machine-level CLI for the Talos VM that replaces the
-# k3s_server role (see docs/talos-terraform-migration-notes.md). Pinned to the
-# Talos version the cluster itself runs: the two are released together and the
+# kubectl. Tracks the cluster's Kubernetes minor, which is set by the pinned
+# Talos version below rather than chosen here — see terraform/clusters/homelab.
+# Re-verified against https://dl.k8s.io/release/stable-1.36.txt as of
+# 2026-08-16: v1.36.3.
+kubectl_version: "1.36.3"
+
+# talosctl — the machine-level CLI for the node, and what replaces `ssh` on a
+# machine with no shell. Pinned to the Talos version the cluster itself runs:
+# the two are released together and the
 # client/server skew window is narrow, so treat this as one version, not two.
 # Re-verified against https://github.com/siderolabs/talos/releases as of
 # 2026-08-16: v1.13.8 (2026-08-04), whose DefaultKubernetesVersion is 1.36.2

@@ -38,9 +38,9 @@ variable "vcpus" {
 
 variable "memory_mib" {
   description = <<-EOT
-    RAM for the node, in MiB. The host has 15Gi total and cannot overcommit
-    it meaningfully, so this is spent, not shared. A 4Gi sandbox coexists with
-    a running k3s; the real cluster is sized only after k3s is stopped.
+    RAM for the node, in MiB. The host has 15Gi total and cannot overcommit it
+    meaningfully, so this is spent, not shared — leave enough for the host's
+    own userland and qemu's per-VM overhead before spending the rest here.
   EOT
   type        = number
   default     = 4096
@@ -81,8 +81,8 @@ variable "system_disk_gib" {
   description = <<-EOT
     System disk size. Sparse: qemu-img raw on ext4 consumes only written
     blocks, so the declared size is a ceiling rather than a reservation.
-    That is load-bearing here, not an optimisation — / has ~61G free while
-    k3s's ~13G of containerd layers are still present. It is also the familiar
+    That is load-bearing here, not an optimisation — / is a 128G SSD carrying
+    both the system and fast images. It is also the familiar
     thin-provisioning hazard: three sparse images can collectively overcommit
     /, and host df will under-report the commitment. Needs a host-level alert
     on / free space; the guest will keep writing happily until / fills under it.

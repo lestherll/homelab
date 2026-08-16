@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # {{ ansible_managed }}
 #
-# "Who watches the watchmen": runs on the bare host, outside k3s's blast
-# radius. Hits Alertmanager's /-/healthy over its tailnet hostname; on
+# "Who watches the watchmen": runs on the bare host, outside the cluster's
+# blast radius. Hits Alertmanager's /-/healthy over its tailnet hostname; on
 # failure, posts to a private ntfy.sh topic. Deliberately a separate
 # notification channel from whatever Alertmanager's own receiver ends up
 # being, so one channel's failure doesn't take down the other.
 #
-# Scope: catches "k3s crashed/OOM-killed but the host OS is still up."
-# Does NOT cover the laptop itself dying.
+# Scope: catches "the cluster stopped answering but the host OS is still up",
+# which now includes the VM being down, since the check is an end-to-end HTTP
+# request and does not care why it failed. Does NOT cover the laptop itself
+# dying, and does not distinguish a dead VM from a sick cluster — see LES-98.
 set -euo pipefail
 
 ALERTMANAGER_URL="{{ alertmanager_healthy_url }}"

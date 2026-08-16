@@ -58,9 +58,8 @@ spec:
   # SeaweedFS sizes Max writable slots off the *backing filesystem's* free
   # space, which is the `bulk` UserVolume's 100 GiB — not the whole 931G disk
   # the image file sits on, and not the node's root filesystem. At 100MB per
-  # volume container that is still ~1000 slots, so the multi-bucket headroom
-  # the note above is protecting survives the move; the specific Max/Free
-  # figures quoted there were measured on k3s and will read lower here.
+  # volume container that is ~1000 slots, which is the multi-bucket headroom
+  # the note above exists to protect.
   volume:
     replicas: 1
     requests:

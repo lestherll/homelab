@@ -1,7 +1,6 @@
 # Cluster plumbing gets its own namespace, same as `storage`. Not kube-system:
-# every other repo-managed component is namespaced, and there is no packaged
-# addon left to stay clear of — on k3s metrics-server lived in kube-system
-# because k3s put it there, and k3s is going away.
+# every repo-managed component here is namespaced, so what lives in kube-system
+# stays limited to what the distribution itself puts there.
 apiVersion: v1
 kind: Namespace
 metadata:

@@ -8,14 +8,13 @@
 # Cutover recreates all three on a fresh cluster and restores from dumps, so the
 # rename is free on that day and a full storage migration on any day after it.
 #
-# NOTE THERE IS NO DEFAULT CLASS, and that is deliberate. On k3s, `local-path`
-# was default because the addon made it so — the choice was never taken. A PVC
-# that names no class now stays Pending, loudly and immediately, instead of
-# silently landing somewhere wrong. Defaulting to `scratch` would preserve the
-# old footgun (a chart that omits storageClassName silently gets Delete
-# storage); defaulting to `fast` would put every disposable PVC on the disk
-# under the most contention. Every PVC-producing site in this repo already names
-# a class explicitly, so this costs nothing today.
+# NOTE THERE IS NO DEFAULT CLASS, and that is deliberate. A PVC that names no
+# class stays Pending, loudly and immediately, instead of silently landing
+# somewhere wrong. Defaulting to `scratch` would mean a chart that omits
+# storageClassName silently gets Delete storage; defaulting to `fast` would put
+# every disposable PVC on the disk under the most contention. Every
+# PVC-producing site in this repo already names a class explicitly, so this
+# costs nothing today.
 #
 # All three are WaitForFirstConsumer: a local-path PV is a directory on one
 # specific node, so binding before the pod is scheduled would pin the pod to a

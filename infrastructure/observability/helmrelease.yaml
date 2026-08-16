@@ -177,13 +177,12 @@ spec:
         requests: { cpu: 100m, memory: 384Mi }
         limits: { cpu: 300m, memory: 768Mi }
 
-    # Control-plane component monitors: all off. On k3s these never scraped
-    # anything — no kube-system services for them exist, so the jobs had no
-    # targets and the series arrived (and were dropped) via the kubelet's
-    # combined registry instead. On Talos they CANNOT scrape anything: Talos
-    # serves etcd/scheduler/controller-manager metrics behind its own PKI,
-    # not reachable with in-cluster credentials. Nothing is lost either way —
-    # no rule or dashboard here joins on those jobs.
+    # Control-plane component monitors: all off, because they cannot work here.
+    # Talos serves etcd/scheduler/controller-manager metrics behind its own PKI,
+    # which in-cluster credentials do not satisfy. Nothing is lost: no rule or
+    # dashboard in this repo joins on those jobs, and the chart drops their
+    # default alerts along with the monitors (so nothing is left firing at a
+    # target that will never exist).
     kubeEtcd:
       enabled: false
     kubeControllerManager:
@@ -251,32 +250,11 @@ spec:
       resources:
         requests: { cpu: 10m, memory: 16Mi }
         limits: { cpu: 500m, memory: 32Mi }
-      # INERT AFTER CUTOVER, and kept deliberately. /sys/class/powercap exists
-      # inside the guest but is EMPTY — verified 2026-08-16 against the running
-      # Talos VM, where the host has intel-rapl:0/:1 plus subzones. RAPL is not
-      # virtualised, so no supplementary group can rescue it and
-      # node_scrape_collector_success{collector="rapl"} will read 0. That is
-      # accepted, not a bug to chase: relocating node-exporter to the metal is
-      # LES-97, deferred by decision, and this key is what LES-97 needs back.
-      # Do not "clean it up" in the meantime.
-      #
-      # Lets the rapl collector read /sys/class/powercap/intel-rapl:*/energy_uj
-      # for host power metrics. That file is 0400 root:root (the kernel's
-      # CVE-2020-8694/PLATYPUS mitigation), so as uid 65534 the collector was
-      # failing EACCES on every scrape. GID 600 is the `rapl` group created by
-      # host_prereqs, which also installs the udev rule that chgrps the counters
-      # to it — this key alone does nothing without that half.
-      #
-      # This is a supplementary group rather than fsGroup on purpose: fsGroup
-      # relabels volume ownership, which is a no-op on sysfs. Supplementary
-      # groups are what the kernel actually checks on the bind-mounted file.
-      #
-      # Deliberately NOT runAsUser: 0, which would have needed no host change at
-      # all. This DaemonSet mounts host / at /host/root, so root here means a
-      # network-listening service can read /etc/shadow, the SOPS age key and the
-      # k3s node token. The whole point is one extra group, not one extra root.
-      securityContext:
-        supplementalGroups: [600]
+      # This DaemonSet measures the VM, not the metal. /sys/class/powercap is
+      # empty inside the guest, so the rapl collector reports nothing and the
+      # power dashboards under dashboards/ have no data source — reconnecting
+      # them means running an exporter on the host, which is LES-97, not a
+      # config change here.
 
     prometheusOperator:
       resources:
@@ -300,31 +278,21 @@ spec:
         # diagnose Grafana OOMKills. If a future OOM investigation comes up
         # short on resolution, this is the line to revisit.
         cAdvisorInterval: 30s
-        # The `(apiserver|etcd)_.*` drop that used to sit here is GONE, and it
-        # must not be reinstated on Talos. It existed because k3s ran the
-        # apiserver, controller-manager, scheduler and kubelet in ONE process
-        # sharing one Prometheus registry, so the kubelet's :10250/metrics
-        # served that whole registry and every apiserver_*/etcd_* series was
-        # stored twice — once under job="apiserver" and again under
-        # job="kubelet". Measured 2026-08-12: 79,694 of 148,366 total series
-        # came from job="kubelet", and only 4,906 of those were genuinely
-        # kubelet/container metrics. Dropping the other ~69,000 (47% of the
-        # TSDB) cost nothing, because job="apiserver" still had them.
+        # DO NOT add a broad `(apiserver|etcd)_.*` drop here. It is tempting
+        # because the kubelet endpoint is the largest single source of series,
+        # but this cluster runs the control-plane components as separate static
+        # pods with separate registries — so the kubelet exposes only kubelet
+        # metrics, and such a rule would drop nothing on a good day. On a bad
+        # one it is a footgun: matching on __name__ alone means the moment a
+        # genuine kubelet series is named that way it vanishes with no second
+        # copy anywhere.
         #
-        # Talos runs those components as separate static pods with separate
-        # registries, so a Talos kubelet exposes only kubelet metrics. The same
-        # regex here would now drop nothing on a good day — and on a bad one it
-        # is a live footgun, because it is written against __name__ alone: the
-        # moment a genuine kubelet series is named apiserver_*/etcd_* it
-        # disappears with no second copy anywhere.
-        #
-        # Expect the series count to look very different after cutover. The 15d
-        # retention and the 8GiB retentionSize above were both sized against the
-        # post-drop k3s TSDB; re-measure before trusting either.
+        # `retention` and `retentionSize` above were sized against a different
+        # cluster's series count. Re-measure before trusting either.
         metricRelabelings:
           # Chart default for this endpoint, preserved — setting this key
-          # replaces the list rather than appending to it, so dropping the k3s
-          # entry above meant keeping this one explicitly.
+          # replaces the list rather than appending to it, so it has to be
+          # restated rather than inherited.
           - action: drop
             sourceLabels: [__name__, le]
             regex: (csi_operations|storage_operation_duration)_seconds_bucket;(0.25|2.5|15|25|120|600)(\.0)?

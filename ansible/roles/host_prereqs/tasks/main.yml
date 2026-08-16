@@ -1,79 +1,29 @@
 ---
-# k3s needs ip_forward=1. It does NOT need swapoff, unlike vanilla kubeadm —
-# no swap-related task here on purpose.
-#
-# The filename is now a misnomer and deliberately not renamed: libvirt's NAT
-# network for the Talos VM needs this same sysctl, so the setting outlives k3s.
-# Renaming the drop-in would leave the old file in place still setting it, which
-# is worse than an inaccurate name.
+# libvirt's NAT network routes the VM's traffic through the host, which needs
+# ip_forward=1. Nothing here needs swapoff.
 - name: Enable net.ipv4.ip_forward via sysctl drop-in
   ansible.builtin.copy:
-    dest: /etc/sysctl.d/99-k3s.conf
+    dest: /etc/sysctl.d/99-ip-forward.conf
     content: |
       net.ipv4.ip_forward = 1
     owner: root
     group: root
     mode: "0644"
-  register: k3s_sysctl_file
+  register: ip_forward_sysctl_file
+
+# The setting previously lived in 99-k3s.conf. Removing that file matters: two
+# drop-ins both setting ip_forward would leave the old one authoritative on
+# alphabetical ties, so a future change to the file above could silently fail
+# to take. Safe to delete unconditionally once this has run everywhere.
+- name: Remove the superseded sysctl drop-in
+  ansible.builtin.file:
+    path: /etc/sysctl.d/99-k3s.conf
+    state: absent
+  register: old_sysctl_file
 
 - name: Apply sysctl settings immediately
   ansible.builtin.command: sysctl --system
-  when: k3s_sysctl_file.changed
-  changed_when: true
-
-# node-exporter's rapl collector reads /sys/class/powercap/intel-rapl:*/energy_uj
-# to report host power draw. That one file is 0400 root:root while everything
-# else in the zone is world-readable — it's the kernel's CVE-2020-8694 (PLATYPUS)
-# mitigation, since unprivileged RAPL reads leak a power side-channel usable to
-# infer AES keys. node-exporter runs as uid 65534, so the collector fails with
-# EACCES (node_scrape_collector_success{collector="rapl"} 0, and a ~225us scrape
-# duration: it fails immediately rather than after doing work).
-#
-# Granting read to one dedicated group is the narrow fix. The two obvious
-# alternatives are both worse here:
-#   - chmod 0444 re-exposes the side channel to every local process, which is
-#     exactly what the kernel restricted.
-#   - running node-exporter as root would work with no host change at all, but
-#     that DaemonSet mounts host / at /host/root, so uid 0 would give a
-#     network-listening service read access to /etc/shadow, the SOPS age key and
-#     the k3s node token. readOnly: true stops writes, not reads.
-# The pod side of this is securityContext.supplementalGroups in
-# infrastructure/observability/helmrelease.yaml — both halves are required.
-- name: Create the rapl group for reading powercap energy counters
-  ansible.builtin.group:
-    name: rapl
-    gid: 600
-    system: true
-
-# Scoped to energy_uj on purpose. The `chmod -R g=u` pattern most RAPL exporter
-# docs (scaphandre, kepler) reach for would also make constraint_*_power_limit_uw
-# group-WRITABLE, handing this group the ability to set CPU power caps.
-#
-# KERNEL=="intel-rapl:*" deliberately matches the subzones (intel-rapl:0:0 core,
-# :0:1 uncore, :0:2 dram) as well as the top-level package-0/psys zones: the rapl
-# collector iterates every zone and one unreadable zone fails the whole collector,
-# not just that zone. It does not match the parent "intel-rapl" device, which has
-# no energy_uj anyway. $env{DEVPATH} is used rather than %k so the rule follows the
-# real device path instead of the /sys/class symlink.
-- name: Install udev rule granting the rapl group read on RAPL energy counters
-  ansible.builtin.copy:
-    dest: /etc/udev/rules.d/70-rapl-energy.rules
-    content: |
-      SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="intel-rapl:*", RUN+="/usr/bin/chgrp rapl /sys$env{DEVPATH}/energy_uj"
-      SUBSYSTEM=="powercap", ACTION=="add|change", KERNEL=="intel-rapl:*", RUN+="/usr/bin/chmod g+r /sys$env{DEVPATH}/energy_uj"
-    owner: root
-    group: root
-    mode: "0644"
-  register: rapl_udev_rule
-
-# udev only applies rules on events, so an installed rule does nothing to the
-# zones that already exist. Trigger it explicitly rather than requiring a reboot.
-- name: Reload udev rules and re-trigger the powercap subsystem
-  ansible.builtin.command: "{{ item }}"
-  loop:
-    - udevadm control --reload
-    - udevadm trigger --subsystem-match=powercap --action=change
-  when: rapl_udev_rule.changed
+  when: ip_forward_sysctl_file.changed or old_sysctl_file.changed
   changed_when: true
 
 # --- Hypervisor layer -----------------------------------------------------
@@ -186,31 +136,14 @@
     state: present
     update_cache: true
 
-# Regression fix vs. the current podman stack: the kube-prometheus-stack chart's
-# node-exporter DaemonSet runs with hostNetwork: true, which binds 0.0.0.0:9100 —
-# exposed to the whole home LAN, not just the tailnet, unlike the current podman
-# setup which binds only TAILSCALE_IP:9100. Scope it back down at the host firewall
-# level rather than fighting the chart's networking model.
-- name: Allow node-exporter port 9100 on the tailscale interface only
-  community.general.ufw:
-    rule: allow
-    interface: "{{ tailscale_interface }}"
-    direction: in
-    port: "9100"
-    proto: tcp
-    comment: "node-exporter — tailnet only"
-
-# The k3s API server binds 0.0.0.0:6443 by default. Scope it to the tailnet so
-# kubectl/flux work from other tailscale devices (kubeconfig points at this
-# host's tailscale IP, already a TLS SAN) without exposing the API to the LAN.
-- name: Allow k3s API port 6443 on the tailscale interface only
-  community.general.ufw:
-    rule: allow
-    interface: "{{ tailscale_interface }}"
-    direction: in
-    port: "6443"
-    proto: tcp
-    comment: "k3s API — tailnet only"
+# NOTHING IN THE CLUSTER NEEDS A HOST INBOUND RULE. The Kubernetes API,
+# node-exporter and every workload listen inside the guest, on a NAT'd network
+# the LAN cannot route to at all — so the host firewall is not what protects
+# them, and adding rules here for them would be theatre. Reaching them from
+# another tailnet device goes through the guest's own Tailscale exposures.
+#
+# What remains is genuinely host-level: sshd, and letting the VM talk to
+# libvirt's dnsmasq.
 
 # sshd listens on all interfaces on this host already (confirmed via `ss -tlnp`)
 # — kept open on all interfaces rather than scoped to tailscale0, so enabling
@@ -222,12 +155,12 @@
     proto: tcp
     comment: "ssh"
 
-# ufw's own default is DEFAULT_FORWARD_POLICY="DROP", which conflicts with k3s's
-# CNI (flannel): pod-to-pod and pod-to-internet traffic crosses the FORWARD chain
-# via cni0/flannel.1, and a DROP-by-default policy there breaks it. Not a real
-# segmentation loss — flannel doesn't enforce NetworkPolicy anyway (see k3s notes),
-# so FORWARD-DROP was never providing real pod-level isolation, just breakage risk.
-- name: Allow forwarded traffic by default (required for flannel/CNI)
+# ufw defaults DEFAULT_FORWARD_POLICY="DROP", which breaks the NAT network: the
+# VM's traffic to the internet crosses the FORWARD chain via virbr-talos, and
+# dropping it there leaves a VM that boots, takes its address, and can reach
+# nothing — including the registries it needs to pull images. Costs no real
+# segmentation, since the only thing being forwarded is this VM's own egress.
+- name: Allow forwarded traffic by default (required for the VM's NAT egress)
   ansible.builtin.lineinfile:
     path: /etc/default/ufw
     regexp: '^DEFAULT_FORWARD_POLICY='

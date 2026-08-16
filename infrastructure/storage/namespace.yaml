@@ -1,8 +1,4 @@
-# One namespace for all three provisioner instances. The previous layout put
-# the bulk instance in its own `storage-bulk` namespace specifically to stay
-# clear of k3s's packaged local-path addon in kube-system, which k3s re-applied
-# on every restart. Talos ships no provisioner at all, so that collision no
-# longer exists and there is nothing left to keep apart.
+# One namespace for all three provisioner instances.
 #
 # The PodSecurity label is load-bearing. Talos enforces the `baseline` profile
 # by default, and baseline forbids hostPath volumes outright. Every one of these

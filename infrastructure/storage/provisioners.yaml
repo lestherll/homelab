@@ -1,11 +1,10 @@
 # The three local-path-provisioner instances that back this cluster's three
-# StorageClasses. On k3s, `scratch` and `fast` (then `local-path` and
-# `local-path-retain`) were both served by the packaged addon in kube-system —
-# one instance, one nodePathMap, one disk. Talos ships no provisioner at all, so
-# the repo owns every instance, and that is what makes it possible to put each
-# class on a different disk: an instance claims only the StorageClasses whose
-# `provisioner:` field matches its own --provisioner-name, so three instances
-# with three names partition the claims cleanly.
+# StorageClasses. Talos ships no storage provisioner, so the repo owns every
+# instance — which is what makes it possible to put each class on a different
+# disk: an instance claims only the StorageClasses whose `provisioner:` field
+# matches its own --provisioner-name, so three instances with three names
+# partition the claims cleanly. One instance with one nodePathMap could only
+# ever serve one disk.
 #
 # What differs between the three is exactly two things: --provisioner-name and
 # the nodePathMap path. Everything else — image, RBAC identity, helper pod,
@@ -46,10 +45,9 @@ data:
     #!/bin/sh
     set -eu
     rm -rf "${VOL_DIR}"
-  # Pinned rather than left at upstream's unpinned `busybox` default. The tag
-  # was inherited from what k3s shipped for its own helper pod; k3s is gone but
-  # the pin is still the right shape, and this image does nothing but mkdir and
-  # rm, so there is no reason to chase it. Re-verified present 2026-08-16.
+  # Pinned rather than left at upstream's unpinned `busybox` default. This
+  # image does nothing but mkdir and rm, so there is no reason to chase it.
+  # Re-verified present 2026-08-16.
   helperPod.yaml: |-
     apiVersion: v1
     kind: Pod
@@ -150,9 +148,7 @@ spec:
       serviceAccountName: local-path-provisioner
       containers:
         - name: local-path-provisioner
-          # Bumped from v0.0.36 (which tracked k3s's packaged version) now that
-          # nothing constrains it to match an addon. v0.0.37 verified as the
-          # latest release 2026-08-16.
+          # v0.0.37 verified as the latest release 2026-08-16.
           image: rancher/local-path-provisioner:v0.0.37
           imagePullPolicy: IfNotPresent
           command:
@@ -176,8 +172,8 @@ spec:
           volumeMounts:
             - name: config-volume
               mountPath: /etc/config/
-          # Sized against the bulk provisioner's observed steady state on k3s
-          # (idle at ~10Mi; it only does work when a PVC is created or deleted).
+          # Idles at ~10Mi — it only does work when a PVC is created or
+          # deleted, so this is steady state, not a ceiling to grow into.
           resources:
             requests: { cpu: 10m, memory: 32Mi }
             limits: { memory: 128Mi }

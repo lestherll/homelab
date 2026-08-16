@@ -69,9 +69,9 @@ locals {
         # failure that can never clear.
         certSANs = [var.node_ip]
 
-        # Required by metrics-server (infrastructure/metrics-server/), and it
-        # is a two-part change like the RAPL group was — this half alone does
-        # nothing. By default a Talos kubelet serves a SELF-SIGNED certificate
+        # Required by metrics-server (infrastructure/metrics-server/), and this
+        # half alone does nothing — see the second half below.
+        # By default a Talos kubelet serves a SELF-SIGNED certificate
         # on :10250, so metrics-server's scrape fails x509 validation and
         # `kubectl top` returns "metrics not available" with the reason visible
         # only in the metrics-server log. This flag makes the kubelet request a
