@@ -1,0 +1,68 @@
+# Flux telling you when it has stopped being able to do its job.
+#
+# This gap was not theoretical. `personal-finance-dashboard`'s Kustomization
+# failed from the moment the cluster moved to Talos — its Application still set
+# a field the platform API had removed — and it sat failing, with the app not
+# running, until somebody happened to run `kubectl get kustomization -A` for an
+# unrelated reason. Flux retried every 10 minutes, failed every 10 minutes, and
+# told nobody. `AGENT.md` even warns that a manifest on an unmerged branch is
+# not live and you must go and look; this is the other half of that problem,
+# where the manifest IS merged and still is not live.
+#
+# Deliberately separate from the Prometheus alerting path (LES-69) rather than
+# folded into it. Flux failures are not a metric threshold — there is no series
+# to alert on, and the useful detail (which Kustomization, which revision, the
+# actual error string) lives in a Kubernetes event that only this controller
+# sees. Trying to route it through Prometheus would mean an exporter in the
+# middle whose only job is to lose that detail.
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Provider
+metadata:
+  name: ntfy
+  namespace: flux-system
+spec:
+  # `generic` is a plain webhook POST of the event as JSON. ntfy takes the body
+  # as the message text, which — as with the Alertmanager receiver — means a
+  # readable but unpretty notification. Consistent with that path on purpose:
+  # one rough edge to fix once, in one place, if it ever becomes worth fixing.
+  type: generic
+  secretRef:
+    name: ntfy
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Alert
+metadata:
+  name: reconciliation-failures
+  namespace: flux-system
+spec:
+  providerRef:
+    name: ntfy
+  # `error` only. Flux emits an info event on every successful reconcile of
+  # every object on a 10-minute interval — routing those would produce a
+  # constant stream of "still fine", which is the fastest possible way to make
+  # the channel unreadable and to bury the one message that matters. Silence
+  # means healthy here, exactly as it does for the Alertmanager route.
+  eventSeverity: error
+  eventSources:
+    # Everything that can silently stop working. GitRepository catches the case
+    # where Flux cannot even see the repo — an expired deploy key or a force-push
+    # to a missing branch — which otherwise looks identical to "nothing changed."
+    - kind: GitRepository
+      name: "*"
+    - kind: Kustomization
+      name: "*"
+    - kind: HelmRelease
+      name: "*"
+    - kind: HelmRepository
+      name: "*"
+  exclusionList:
+    # A Kustomization waiting on its dependsOn is the ordering working, not a
+    # failure — and on a cold apply every dependent Kustomization emits this
+    # before the thing it waits for is ready. Without this exclusion, a clean
+    # cluster rebuild would open with a burst of notifications that are all
+    # false, which is a bad first impression for a channel that needs to be
+    # trusted.
+    - "dependency .* is not ready"
+    # Same shape: a HelmRelease whose CRDs are still being installed by another
+    # release retries and succeeds on its own.
+    - "no matches for kind"
