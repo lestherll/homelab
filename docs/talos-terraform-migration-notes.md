@@ -47,6 +47,14 @@ decide before starting is collected under
 changes afterwards is under
 [Platform development after the move](#platform-development-after-the-move).
 
+**Execution started (2026-08-16).** Phases 0–2 are built and the sandbox VM is
+running. Ansible owns the metal (hypervisor packages, a NAT libvirt network,
+two storage pools); `terraform/` owns the VM and cluster lifecycle. k3s is
+untouched and still `active` throughout — nothing in this pass went near it.
+See `terraform/README.md` for the operating manual and
+[Execution log](#execution-log-2026-08-16) below for what the build actually
+taught, including four findings that contradict or extend the design above.
+
 ## Answers locked in (2026-08-15)
 
 Four forks were put to the operator; the answers shape everything below:
@@ -591,6 +599,135 @@ amendment, D8 amendment per Q8).
 effectively empty. The data-preservation step that Alternative A calls its
 "single biggest technical unknown" is nearly free *right now*, and gets
 steadily more expensive as SeaweedFS and VictoriaMetrics accumulate history.
+
+## Execution log (2026-08-16)
+
+What building it actually taught. Recorded in the same spirit as the
+implementation log in `self-service-platform-design-notes.md`: the gotchas are
+the expensive part, and none of these were visible from documentation.
+
+### Decisions taken
+
+| Decision | Choice | Note |
+|---|---|---|
+| Networking (Q11/Q12) | NAT + static address | ufw stays meaningful; `certSANs` known before bootstrap |
+| State strategy (Q4) | **Terraform proper**, not OpenTofu | See below — the premise changed |
+| Tailscale placement (Q13) | Host only | No Tailscale extension in the schematic |
+| Flux bootstrap (correction 8) | Separate step | Terraform stops at an empty cluster |
+| Versions | Talos v1.13.8 / Kubernetes 1.36.2 / Terraform 1.15.8 / libvirt provider 0.9.8 / talos provider 0.11.0 | all re-verified 2026-08-16 |
+| Default StorageClass | none | unchanged from the design above |
+
+**Q4 is resolved better than either fork allowed for.** The write-up assumed a
+choice between OpenTofu's state encryption and accepting tfstate as a second
+root secret. The talos provider's *ephemeral resources* plus Terraform 1.11's
+*write-only arguments* (`client_configuration_wo`,
+`machine_configuration_input_wo`) mean the rendered config and client config
+reach the provider without ever being recorded. Combined with generating the
+PKI out of band under the existing age key, state holds no authoritative key
+material at all — confirmed in a real plan, which prints them as
+`(write-only attribute)` and records only a `machine_configuration_hash`. So
+Terraform proper keeps D12 intact and the learning objective naming Terraform
+survives. **This supersedes Q4's fork.**
+
+### Verified empirically
+
+- **The disk-serial → CEL join works.** Ranked risk #2, and it holds end to
+  end: libvirt's `<serial>` surfaces in `talosctl get disks` (`vdb`→`fast`,
+  `vdc`→`bulk`) and the CEL selectors matched them into `u-fast` (`/dev/vdb1`)
+  and `u-bulk` (`/dev/vdc1`), both `ready`. `grow: true` also works — bulk took
+  the full 107 GB.
+- **RAPL really is unavailable in the guest.** `/sys/class/powercap` exists but
+  is *empty* inside the VM, against `intel-rapl:0`/`:1` plus subzones on the
+  host. The document asked for this to be confirmed rather than trusted; it is
+  confirmed. Power metrics will be dark exactly as locked-in answer #3 accepts.
+- **Sparse images work as designed.** After a full bootstrap: system 309 MiB of
+  20 GiB, fast 453 MiB of 20 GiB, bulk 2.07 GiB of 100 GiB. `/` still has 56G
+  free with k3s's data still present.
+- **qemu-guest-agent runs** (`ext-qemu-guest-agent` Running), so graceful
+  shutdown has its prerequisite.
+- **Idle memory** ~250 MB before the control plane starts.
+
+### Findings that change the design
+
+1. **The libvirt network must avoid the Kubernetes service CIDR.** The obvious
+   subnet choice, `10.100.0.0/24`, sits *inside* the default service CIDR
+   `10.96.0.0/12`. Nothing errors: the VM boots, takes its address, serves the
+   Talos API, and etcd then waits forever on "Waiting for etcd spec" with no
+   stated cause. The reason appears only in
+   `talosctl dmesg | grep diagnostic`. Now `10.10.0.0/24`, with the full list
+   of CIDRs it has to miss recorded in the role defaults. **This is the single
+   most expensive thing found, and the least discoverable.**
+2. **`create.content.url` is unusable in libvirt provider 0.9.8** when combined
+   with an explicit `capacity` — "cannot extend file: File too large" at every
+   size tested. Without `capacity` it pins the volume to the content's size.
+   The system disk is therefore a **qcow2 overlay** on the staged base image,
+   which is faster to rebuild anyway (~0s, no 4.15 GiB copy) but means the one
+   volume carrying etcd is not raw. Recorded as a cost in `volumes.tf`; moving
+   etcd onto `fast` is the first lever if write latency ever looks wrong. Note
+   the base image becomes load-bearing at *runtime*, not just at create time.
+3. **Talos v1.13 moved hostname into its own `HostnameConfig` document**, and a
+   config patch *merges* into it rather than replacing it — so the generated
+   `auto: stable` survives and collides with a static hostname. `auto: off` is
+   the value that works; `$patch: replace`, `auto: ""` and `auto: null` each
+   fail differently. The old v1alpha1 `machine.network.hostname` field still
+   exists and is still documented, which is what makes this easy to get wrong.
+4. **`machine.certSANs` is mandatory, and its absence fails as a hang.** Talos
+   issues the apid certificate covering only what it is told plus loopback, so
+   without it every authenticated call fails with "certificate is valid for
+   127.0.0.1". `talos_machine_bootstrap` then retries a condition that can
+   never clear, so the symptom is an apply that hangs rather than errors.
+
+Smaller ones, all costing a cycle each: domains defined from XML get none of
+`virt-install`'s implicit defaults (libvirt rejects them with "UEFI requires
+ACPI on this architecture"); disks referenced by pool/volume rather than by
+explicit path fail to start under AppArmor because qemu cannot open the
+backing file; `UserVolumeConfig` requires `minSize` or `maxSize` even with
+`grow`; `community.libvirt` declares neither of its Python dependencies
+(`python3-libvirt`, `python3-lxml`) and both report a module name rather than a
+package name; `virt_pool` honours one action per invocation, so `state` and
+`autostart` together silently apply only the state; and `virt_net`'s
+`command: define` creates but cannot update.
+
+### Phase 2.5 passed — the architecture is validated
+
+The storage lifecycle rehearsal, described above as "the experiment that
+actually proves the architecture" and the one most worth failing early, was run
+end to end and **passed**:
+
+```
+write canary to /var/mnt/fast and /var/mnt/bulk
+  → terraform destroy -target=libvirt_domain.node -target=libvirt_volume.system
+  → 4 resources destroyed; fast and bulk untouched on disk
+  → terraform apply  (fresh VM, fresh system disk, fresh Talos install)
+  → volumes reattached by SERIAL, remounted at /var/mnt/*
+  → canary values byte-identical, timestamps and all
+```
+
+Two supporting properties were verified rather than assumed:
+
+- **A blanket `terraform destroy` refuses**, and refuses at *plan* time, so
+  nothing is partially destroyed: `prevent_destroy` on `fast` and `bulk` fails
+  the whole run with the domain still up. The rebuild path really is the
+  targeted destroy documented in `terraform/README.md`.
+- **The reattach is by serial, not enumeration order** — confirmed on a VM that
+  had never existed before, where `vdb`/`vdc` were assigned afresh.
+
+So the conditional in the plan — "if this fails, the whole virtualised
+direction is worth less than Alternative A" — resolves in favour of the
+virtualised direction. Destroy/recreate is now usable as the development
+primitive, which is what makes cold-apply testing routine.
+
+### Still to do
+
+- **Phase 3 onward.** Nothing has been pointed at Flux yet; the cluster is
+  empty beyond its own control plane. `infrastructure/` still needs the forced
+  changes listed under Alternative A (own SSD provisioner, storage-class
+  renames, metrics-server, observability cleanup) before it can reconcile here.
+- **Re-run the Ansible converge** to confirm idempotency (`changed=0`) and to
+  apply the pool-autostart fix, which was corrected in the role after the
+  network and pools were already created by hand.
+- The host-side `node-exporter` relocation remains deferred, per locked-in
+  answer #3.
 
 ## Feasibility: what could actually stop this
 
