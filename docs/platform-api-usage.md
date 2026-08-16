@@ -193,6 +193,41 @@ app that serves no `/metrics` produces a permanently-failing scrape target that
 nobody can fix, and a monitoring page with a permanent red mark on it is one
 people stop reading.
 
+### Seeing what a type actually renders
+
+`scripts/platform-render` exists so these types can be read rather than
+trusted. `Application` wires database URIs and S3 keys into a Deployment
+through `secretKeyRef`s generated several layers down; this is how you look at
+that wiring instead of taking its word for it.
+
+Before applying — validates against the live schema and, more usefully, shows
+every default you did **not** set but will get:
+
+```
+scripts/platform-render preview -f deploy/application.yaml
+```
+
+After applying — the escape hatch. Every object kro really rendered, cleaned of
+cluster bookkeeping, as manifests you could commit and maintain by hand:
+
+```
+scripts/platform-render eject Application/myapp -n myapp
+```
+
+`eject` labels each object with the RGD node that produced it, and says
+explicitly when a resource was *not* rendered for your instance — "why is there
+no PVC?" is exactly the question it exists to answer. Its output applies
+cleanly as-is (verified), which is what makes forking down out of the
+abstraction a real option rather than a claim.
+
+**What `preview` deliberately does not do** is compute the rendered objects.
+kro evaluates its CEL in its controller, *after* the instance is stored, not in
+an admission webhook — `kubectl apply --dry-run=server` on an `Application`
+returns the `Application` and nothing else. A pre-apply render would mean a
+second implementation of kro's evaluator, and one that drifts from the real one
+is worse than no preview. So `preview` lists which resources the RGD declares
+and the condition each conditional one depends on, and stops there.
+
 ### Attachment lists are always lists
 
 Even a single database or bucket is written as a one-item list. Aliases are
