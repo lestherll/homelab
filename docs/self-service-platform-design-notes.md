@@ -1638,3 +1638,77 @@ first component in this repo with a platform-owned CRD-dependent resource
 sitting next to its own installer, and won't be the last if a message broker
 (see `docs/message-broker-design-notes.md`) or similar follows the same
 shape.
+
+### PR — `Application` revision 4: telemetry, and the defaulting trap it exposed
+
+Closes the gap where the type the platform exists to run was the only one
+emitting no telemetry: `Database` rendered a `PodMonitor` and SeaweedFS shipped
+four `ServiceMonitor`s, while `Application` rendered `Deployment` + `Service` +
+`Ingress` and stopped.
+
+What shipped, and the one decision worth arguing about:
+
+- **A `PrometheusRule` on every instance, unconditionally.** Three alerts —
+  `ApplicationNotAvailable`, `ApplicationRestartLooping`,
+  `ApplicationMemoryNearLimit` — all derived from kube-state-metrics and the
+  kubelet, so they work for an app that exposes nothing at all. The memory one
+  exists because the platform, not the app author, sets the memory limit (from
+  `spec.size`); without it an OOMKill arrives as an unexplained restart of a
+  limit nobody chose.
+- **A `PodMonitor` only when `metrics.enabled: true`.** Deliberately opt-in,
+  against the instinct that a platform should just do it. Scraping an app that
+  serves no `/metrics` yields a permanently-failing target that nobody can fix
+  from the platform side, and a permanently-red thing in the monitoring UI is
+  precisely what teaches an operator to stop reading it. A missing target is
+  honest; an expected-to-fail one is corrosive.
+- **One dashboard for all apps**, templated on namespace/deployment rather than
+  authored per app — a per-app dashboard would be per-app work, which is what
+  the typed API exists to delete. Its Delivery row shares its definition of
+  health with the alerts above, so the two cannot drift apart.
+- `PodMonitor` uses `portNumber`, not a named `port`. Selecting by name would
+  have meant naming the container port in the Deployment, and **any** edit to a
+  pod template rolls every running instance — an otherwise purely additive
+  revision would have restarted every app on the cluster to gain a name nothing
+  reads.
+
+#### The real finding: `has(schema.spec.<block>)` cannot gate anything
+
+Revision 4 was written with `includeWhen: ${has(schema.spec.metrics)}`, copying
+revision 3's `has(schema.spec.persistence)`. It did not work — the `PodMonitor`
+appeared on `fastapi-echo`, which sets no `metrics`. Chasing that revealed the
+mechanism, and that **revision 3 had the same bug live and undetected**.
+
+kro emits `"default": {}` on a custom-type field in the generated CRD whenever
+**any** of that type's sub-fields carries a default. The API server then
+materialises the block on every instance that omits it, so `has()` on the parent
+is always true. Both halves confirmed against the live CRD: `securityContext`
+(no sub-field defaults) carries no `default: {}` and gates correctly;
+`persistence` (three defaults) carried one.
+
+The consequence had been running in production since revision 3: `fastapi-echo`,
+which sets no persistence, was holding a bound 1Gi PVC on the `fast` tier and a
+phantom `/app/data` mount. Since both tiers are `Retain`, every app deleted in
+that state would have left an orphaned PV behind. Nothing failed and nothing
+alerted — the failure mode is silent in both directions, which is why it
+survived a revision that was itself carefully reviewed.
+
+The fix, and the idiom for any future optional block: **gate on a leaf field
+that carries no default, never on the parent.** `persistence.size` lost its
+`1Gi` default and became that leaf, which is also the more honest API — a
+platform cannot guess how much disk an app needs, and asking for persistence
+without saying how much never meant anything. `metrics` has no such natural
+leaf, being a pure on/off, so it carries an explicit `enabled: false`.
+
+Verified live end to end, not reasoned about: graph accepted at revision 5; the
+phantom PVC deleted and the volume/volumeMount gone from the Deployment;
+`metrics.enabled` toggled true and false with the `PodMonitor` appearing and
+disappearing; all three alert rules loaded into Prometheus with `health: ok` and
+their PromQL — including the `group_left()` memory join — returning real
+samples; the dashboard served by Grafana with both template variables
+resolving, every Delivery query returning data and the RED queries returning
+empty for an app that has not opted in.
+
+Left behind on purpose: one `Released` PV (`pvc-d921aecd…`, empty) from the
+phantom claim, and `Alertmanager`'s receiver still `null` (LES-69) — these
+alerts are visible in the Prometheus and Alertmanager UIs and are delivered
+nowhere until that lands.

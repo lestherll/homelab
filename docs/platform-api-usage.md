@@ -108,14 +108,24 @@ spec:
     runAsGroup: 1000
     fsGroup: 1000
   persistence:
-    size: 1Gi                       # default 1Gi
+    size: 1Gi                       # NO DEFAULT — setting it is what asks
     tier: fast                      # fast|bulk, default fast
     mountPath: /app/data            # default /app/data
+
+  # Optional. Off unless you say otherwise — see "Telemetry" below.
+  metrics:
+    enabled: true                   # default false
+    path: /metrics                  # default /metrics, scraped on spec.port
+    interval: 30s                   # default 30s
 ```
 
 Renders `Deployment` + `Service` + `Ingress` (`ingressClassName: tailscale`,
-same shape every ingress in this cluster already uses), plus a
-`PersistentVolumeClaim` named `<app>-data` when `persistence` is set.
+same shape every ingress in this cluster already uses), plus:
+
+- a `PersistentVolumeClaim` named `<app>-data` — only when `persistence.size`
+  is set,
+- a `PrometheusRule` named `<app>` — **always**,
+- a `PodMonitor` named `<app>` — only when `metrics.enabled: true`.
 
 ### Choosing a persistence tier
 
@@ -137,6 +147,51 @@ need to survive a restart, use an `emptyDir` in your own manifest and skip
 > you swap the field; nothing else in the spec changes, and `mountPath` keeps
 > its meaning and its default. Data in an old host directory is not migrated
 > for you — copy it into the new volume before deleting the old path.
+
+> **Changed again (revision 4).** `persistence.size` no longer defaults to
+> `1Gi`. Setting it is now what *asks* for a volume, and omitting it is how you
+> opt out. Revision 3 tried to read that intent from whether the `persistence`
+> block was present, which turned out to be untestable — the generated CRD
+> defaults the whole block in, so **every app was silently given a 1Gi volume
+> and an `/app/data` mount it never requested**. If your app did ask for
+> persistence, nothing changes for you. If it did not, its phantom claim is
+> deleted on the next reconcile and the (empty) volume behind it is left
+> `Released` for cleanup.
+
+### Telemetry
+
+Every `Application` gets a `PrometheusRule` with no opt-in and no work:
+
+| Alert | Fires when |
+|---|---|
+| `ApplicationNotAvailable` | the Deployment has 0 available replicas for 10m |
+| `ApplicationRestartLooping` | more than 3 container restarts in any 15m |
+| `ApplicationMemoryNearLimit` | working set above 90% of the memory limit for 15m |
+
+All three read kube-state-metrics and kubelet data, so they work whether or not
+your app exposes anything. `ApplicationMemoryNearLimit` is the one worth
+knowing about in advance: the memory limit comes from `spec.size`, which you
+may never have thought about, and this alert is what turns an otherwise
+unexplained OOMKill into "ask for the next size up."
+
+The matching dashboard is **Platform — Application** in Grafana. There is one,
+not one per app: pick your namespace and app from the dropdowns. Its *Delivery*
+row is populated for every app, always.
+
+Its *Application signals* row — request rate, error ratio, latency — needs two
+things from you:
+
+1. serve Prometheus metrics on your main `port`, using the standard client
+   names `http_requests_total{status}` and `http_request_duration_seconds`
+   (what `prometheus-fastapi-instrumentator` and its equivalents emit by
+   default), and
+2. set `metrics.enabled: true`.
+
+Until then those panels are empty, which is the intended state and not a fault
+to report. Scraping is **off by default** on purpose: pointing Prometheus at an
+app that serves no `/metrics` produces a permanently-failing scrape target that
+nobody can fix, and a monitoring page with a permanent red mark on it is one
+people stop reading.
 
 ### Attachment lists are always lists
 

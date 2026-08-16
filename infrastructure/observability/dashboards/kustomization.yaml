@@ -64,3 +64,25 @@ configMapGenerator:
     options:
       labels:
         grafana_dashboard: "1"
+  # platform-application.json is hand-built, and unlike every other dashboard
+  # here it is not about a component — it is about whatever the platform is
+  # currently running. One dashboard templated on a namespace/deployment pair
+  # serves every Application instance, present and future, which is the whole
+  # argument: a per-app dashboard would be per-app work, and per-app work is
+  # exactly what the typed platform API exists to delete.
+  #
+  # Its two halves have deliberately different contracts. The Delivery row is
+  # kube-state-metrics and kubelet data, so it is populated for every app with
+  # no cooperation at all, and its panels are the same signals the Application
+  # RGD's PrometheusRule alerts on — the dashboard and the alerts are two views
+  # of one set of facts, not two independent definitions of health. The
+  # Application-signals row reads the standard Prometheus client metric names
+  # and is EXPECTED to be empty for an app that has not set metrics.enabled;
+  # the text panel at the top says so, because an unexplained empty panel reads
+  # as a broken dashboard and trains people to distrust the whole thing.
+  - name: grafana-dashboard-platform-application
+    files:
+      - platform-application.json
+    options:
+      labels:
+        grafana_dashboard: "1"

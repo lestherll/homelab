@@ -35,6 +35,27 @@
 #           goes with it; that CLI moves into a container or becomes an
 #           endpoint on the app. fastapi-echo sets no persistence and is
 #           unaffected.
+#   rev 4 — telemetry, plus the fix for a rev-3 defect it uncovered.
+#
+#           Telemetry: an opt-in `metrics` block rendering a PodMonitor, and an
+#           always-rendered PrometheusRule carrying three delivery-level alerts
+#           that need no cooperation from the app. Purely additive — an existing
+#           instance gains the alerts and changes shape in no other way.
+#
+#           The fix is NOT additive and is worth reading before upgrading:
+#           rev 3's `includeWhen: ${has(schema.spec.persistence)}` never
+#           excluded anything (see DEFAULTING TRAP below), so EVERY Application
+#           has been silently holding a 1Gi `fast` PVC and an /app/data mount it
+#           never asked for. Gating now reads `has(schema.spec.persistence.size)`
+#           and `size` loses its default.
+#
+#           Consequence on upgrade, deliberate: any instance that did not ask
+#           for persistence has its phantom PVC DELETED by kro on the next
+#           reconcile. Both tiers are Retain, so the PV behind it survives as
+#           Released and no data can be lost — but a Released PV per affected
+#           app is left to clean up by hand. Verified live on fastapi-echo:
+#           PVC removed, volume and volumeMount gone from the Deployment, app
+#           unaffected. An instance that DOES set persistence.size is untouched.
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
@@ -84,8 +105,63 @@ spec:
       # make state survive, and a class whose contract is "disposable" would be
       # an attractive nuisance here; an app that wants scratch space should use
       # emptyDir, which needs no platform feature at all.
+      # Revision 4. Opt-in via an explicit `enabled` flag rather than by the
+      # presence of the block — see the DEFAULTING TRAP note on Persistence
+      # below for why presence is not something this API can test.
+      #
+      # Opt-in rather than on-by-default is the load-bearing choice here, and it
+      # cuts against "the platform should just do it for you". Scraping an app
+      # that serves no /metrics produces a permanently-red Prometheus target
+      # that nobody can fix from the platform side, and a permanently-red thing
+      # in the monitoring UI is exactly the training signal that teaches an
+      # operator to stop reading it. A missing target is honest; a failing one
+      # that is *expected* to fail is corrosive. The Kubernetes-level half of
+      # the signal (the PrometheusRule and the delivery row of the dashboard)
+      # needs no app cooperation and is therefore NOT gated on this block.
+      #
+      # No separate metrics port. Every field here describes the app's own
+      # `spec.port`, which is where the Prometheus client libraries these apps
+      # use put /metrics by default. An app that genuinely serves metrics
+      # elsewhere is an additive `port` field later, not a shape this revision
+      # has to guess at.
+      Metrics:
+        enabled: boolean | default=false description="set true once the app actually serves Prometheus metrics"
+        path: string | default="/metrics" description="path the app serves Prometheus metrics on, scraped on spec.port"
+        interval: string | default="30s" description="scrape interval"
+      #
+      # DEFAULTING TRAP — this cost a live bug, and it applies to every custom
+      # type in this file. kro emits `default: {}` on a custom-type field in the
+      # generated CRD **whenever any of that type's sub-fields carries a
+      # default**. The API server then materialises the whole block on every
+      # instance that omits it, so `has(schema.spec.<field>)` is ALWAYS TRUE and
+      # cannot gate anything.
+      #
+      # Revision 3 shipped `includeWhen: ${has(schema.spec.persistence)}` on
+      # that basis and it never excluded a single instance: fastapi-echo, which
+      # sets no persistence at all, was found holding a bound 1Gi PVC on the
+      # `fast` tier plus a phantom /app/data mount — and since both tiers are
+      # Retain, every such app would have left an orphaned PV behind on delete.
+      # Found by testing rev 4's identical gate rather than by anything failing,
+      # which is the point: this failure mode is silent in both directions.
+      #
+      # Confirmed empirically on the live cluster, both halves: `securityContext`
+      # (no sub-field has a default) gets NO `default: {}` and gates correctly,
+      # while `persistence` (three defaults) got one. So the rule is the
+      # sub-fields, not the type.
+      #
+      # The fix, and the idiom to follow for any future block: gate on a LEAF
+      # field that carries no default, never on the parent. `size` is that leaf
+      # here — dropping its "1Gi" default is not a loss, since a platform cannot
+      # honestly guess how much disk an app needs, and asking for persistence
+      # without saying how much was never meaningful. `tier` and `mountPath`
+      # keep their defaults. Metrics uses an explicit `enabled` boolean instead,
+      # because a pure on/off feature has no such natural leaf and a flag reads
+      # as the intent it is.
       Persistence:
-        size: string | default="1Gi" description="volume size, e.g. 1Gi"
+        # No default — deliberately. See DEFAULTING TRAP above: this field's
+        # absence IS the opt-out, so giving it a default would silently give
+        # every app a volume it never asked for. Setting it is what asks.
+        size: string | description="volume size, e.g. 1Gi — REQUIRED to enable persistence; omitting it is how an app opts out"
         tier: string | enum="fast,bulk" default="fast" description="fast = durable, low-latency, small; bulk = durable, high-capacity, sequential"
         mountPath: string | default="/app/data" description="path inside the container the volume is mounted at"
     spec:
@@ -112,6 +188,7 @@ spec:
       # ternary doesn't type-check in kro's CEL and dyn() is needed.
       securityContext: SecurityContext
       persistence: Persistence
+      metrics: Metrics
     status:
       url: ${ingress.status.loadBalancer.ingress[0].hostname}
       availableReplicas: ${deployment.status.availableReplicas}
@@ -315,7 +392,7 @@ spec:
     # round.
     - id: dataVolume
       includeWhen:
-        - ${has(schema.spec.persistence)}
+        - ${has(schema.spec.persistence.size)}
       template:
         apiVersion: v1
         kind: PersistentVolumeClaim
@@ -481,7 +558,7 @@ spec:
                   # empirically after the object case's dyn() fix didn't
                   # extend to lists on its own.
                   volumeMounts: >-
-                    ${dyn(has(schema.spec.persistence) ? [{
+                    ${dyn(has(schema.spec.persistence.size) ? [{
                       "name": "data",
                       "mountPath": schema.spec.persistence.mountPath
                     }] : [])}
@@ -494,7 +571,7 @@ spec:
               # independent of whether the PVC was included — the same reasoning
               # as identityRef in s3Credentials above.
               volumes: >-
-                ${dyn(has(schema.spec.persistence) ? [{
+                ${dyn(has(schema.spec.persistence.size) ? [{
                   "name": "data",
                   "persistentVolumeClaim": {
                     "claimName": schema.metadata.name + "-data"
@@ -540,3 +617,156 @@ spec:
                         name: ${schema.metadata.name}
                         port:
                           number: 80
+
+    # ---- Telemetry (revision 4) ---------------------------------------------
+    #
+    # A PodMonitor, not a ServiceMonitor. Both would work, and ServiceMonitor is
+    # the more common choice, but PodMonitor is what this repo already uses for
+    # the same job (rgd-database.yaml) and it scrapes the pod directly rather
+    # than through a Service whose one port exists to serve user traffic.
+    #
+    # `portNumber` rather than `port` matters more than it looks. Selecting the
+    # scrape target by NAME would require naming the container port in the
+    # Deployment above, and any edit to a pod template rolls every running
+    # instance — so a revision that is otherwise pure addition would have
+    # restarted every app on the cluster to gain a name nothing else reads.
+    # portNumber targets the same port by value and leaves the pod template
+    # untouched. Confirmed present on this cluster's installed PodMonitor CRD,
+    # not assumed from upstream docs.
+    - id: podMonitor
+      includeWhen:
+        - ${schema.spec.metrics.enabled}
+      template:
+        apiVersion: monitoring.coreos.com/v1
+        kind: PodMonitor
+        metadata:
+          name: ${schema.metadata.name}
+          namespace: ${schema.metadata.namespace}
+          labels:
+            # REQUIRED, not decoration — the same trap as the Database RGD's
+            # PodMonitor. podMonitorSelector is {release: kube-prometheus-stack}
+            # and podMonitorNamespaceSelector is {} (both verified live), so
+            # this label is the whole difference between "scraped from any
+            # namespace" and "created successfully and silently never scraped."
+            release: kube-prometheus-stack
+        spec:
+          selector:
+            matchLabels:
+              app: ${schema.metadata.name}
+          podMetricsEndpoints:
+            - portNumber: ${schema.spec.port}
+              path: ${schema.spec.metrics.path}
+              interval: ${schema.spec.metrics.interval}
+
+    # Unconditional, unlike the PodMonitor above: every rule here is derived
+    # from kube-state-metrics and the kubelet, so it fires correctly for an app
+    # that exposes nothing at all. That asymmetry is the point — an app author
+    # gets the alerts that need no cooperation for free, and opts in only to the
+    # part that genuinely requires work in their own code.
+    #
+    # Deliberately NOT here: request-rate/error-rate/latency alerting. Those
+    # need a metric-name contract the platform cannot enforce, and thresholds
+    # that are per-app judgement calls; a wrong threshold shipped platform-wide
+    # is worse than no alert. The RED signals get a dashboard (read when you are
+    # already looking) rather than an alert (interrupts you).
+    #
+    # NOTE these alerts currently fire into a black hole — Alertmanager's
+    # receiver is still `null` (LES-69), so they are visible in the Prometheus
+    # and Alertmanager UIs and nowhere else. Still worth landing: LES-69 is a
+    # delivery-side fix, and this way it lands into a cluster that already has
+    # something to deliver.
+    - id: alerts
+      template:
+        apiVersion: monitoring.coreos.com/v1
+        kind: PrometheusRule
+        metadata:
+          name: ${schema.metadata.name}
+          namespace: ${schema.metadata.namespace}
+          labels:
+            release: kube-prometheus-stack
+        spec:
+          groups:
+            - name: ${"platform.application." + schema.metadata.name}
+              rules:
+                # Availability, from the Deployment's own status. Catches the
+                # whole family of "it is not serving" causes — image pull
+                # failure, admission rejection, unschedulable, failing
+                # readiness — with one rule, because all of them end at zero
+                # available replicas.
+                #
+                # 10m, not 5m: a rollout with imagePullPolicy: Always on this
+                # node routinely takes minutes, and an alert that fires on every
+                # normal deploy is one that gets muted.
+                - alert: ApplicationNotAvailable
+                  # Single-quoted CEL strings, so the PromQL's own double quotes
+                  # survive unescaped — the same reason rgd-application.yaml's
+                  # S3 policyDocument is written this way.
+                  expr: >-
+                    ${'kube_deployment_status_replicas_available{namespace="' +
+                      schema.metadata.namespace + '",deployment="' +
+                      schema.metadata.name + '"} == 0'}
+                  for: 10m
+                  labels:
+                    severity: critical
+                    platform_application: ${schema.metadata.name}
+                  annotations:
+                    summary: ${schema.metadata.name + " has no available replicas"}
+                    description: >-
+                      ${"Deployment " + schema.metadata.namespace + "/" + schema.metadata.name +
+                        " has reported 0 available replicas for 10 minutes, so it is not serving " +
+                        schema.spec.host + ". Start with `kubectl describe deploy -n " +
+                        schema.metadata.namespace + " " + schema.metadata.name + "`."}
+
+                # Restart looping. Separate from the rule above because the two
+                # fail differently: an app that crashes and recovers within the
+                # restart backoff can keep a replica available for most of every
+                # minute and never trip ApplicationNotAvailable, while dropping
+                # in-flight requests the whole time.
+                - alert: ApplicationRestartLooping
+                  expr: >-
+                    ${'increase(kube_pod_container_status_restarts_total{namespace="' +
+                      schema.metadata.namespace + '",container="' +
+                      schema.metadata.name + '"}[15m]) > 3'}
+                  for: 5m
+                  labels:
+                    severity: warning
+                    platform_application: ${schema.metadata.name}
+                  annotations:
+                    summary: ${schema.metadata.name + " is restart looping"}
+                    description: >-
+                      ${"A container in " + schema.metadata.namespace + "/" + schema.metadata.name +
+                        " restarted more than 3 times in 15 minutes. Its liveness probe (" +
+                        schema.spec.probePath + ") or the process itself is failing. Previous logs: " +
+                        "`kubectl logs -n " + schema.metadata.namespace + " deploy/" +
+                        schema.metadata.name + " --previous`."}
+
+                # Memory headroom. The PLATFORM sets the limits (from
+                # spec.size), so an app author never chose 128Mi and has no
+                # reason to expect it — which makes an OOMKill land as an
+                # unexplained restart rather than as "you need the next size
+                # up". This rule turns the second into the first, and fires
+                # before the kill rather than after it.
+                #
+                # Deliberately no CPU equivalent: hitting the CPU limit
+                # throttles, which is a latency problem the dashboard shows
+                # honestly, not a liveness event worth an alert.
+                - alert: ApplicationMemoryNearLimit
+                  expr: >-
+                    ${'max by (pod) (container_memory_working_set_bytes{namespace="' +
+                      schema.metadata.namespace + '",container="' + schema.metadata.name +
+                      '"} / on (pod, container) group_left() ' +
+                      'kube_pod_container_resource_limits{namespace="' +
+                      schema.metadata.namespace + '",container="' + schema.metadata.name +
+                      '",resource="memory"}) > 0.9'}
+                  for: 15m
+                  labels:
+                    severity: warning
+                    platform_application: ${schema.metadata.name}
+                  annotations:
+                    summary: ${schema.metadata.name + " is within 10% of its memory limit"}
+                    description: >-
+                      ${"Working set has been above 90% of the memory limit for 15 minutes, so " +
+                        schema.metadata.namespace + "/" + schema.metadata.name +
+                        " is heading for an OOMKill. The limit comes from spec.size (currently " +
+                        schema.spec.size + ") — raise it there, not on the Deployment, which kro " +
+                        "will revert."}
