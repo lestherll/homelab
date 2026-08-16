@@ -10,3 +10,9 @@ collections:
     version: "12.1.0"
   - name: community.sops
     version: "2.2.7"
+  # community.libvirt provides virt_net/virt_pool, used by host_prereqs and
+  # bulk_storage to declare the Talos VM's network and its two storage pools.
+  # Needs python3-libvirt on the host, which host_prereqs installs.
+  # Re-verified against galaxy.ansible.com as of 2026-08-16: 2.3.0.
+  - name: community.libvirt
+    version: "2.3.0"

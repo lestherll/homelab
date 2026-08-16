@@ -20,3 +20,39 @@
     owner: root
     group: root
     mode: "0700"
+
+# --- HDD-backed libvirt pool for the Talos VM's bulk data disk -------------
+# Guarded by the assert at the top of this role; see the comment on
+# bulk_storage_libvirt_pool_path in defaults/main.yml for why it lives here
+# rather than alongside the SSD pool in host_prereqs.
+
+- name: Create the bulk libvirt pool directory
+  ansible.builtin.file:
+    path: "{{ bulk_storage_libvirt_pool_path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0711"
+
+- name: Define the bulk libvirt storage pool
+  community.libvirt.virt_pool:
+    name: "{{ bulk_storage_libvirt_pool_name }}"
+    command: define
+    xml: |
+      <pool type='dir'>
+        <name>{{ bulk_storage_libvirt_pool_name }}</name>
+        <target><path>{{ bulk_storage_libvirt_pool_path }}</path></target>
+      </pool>
+
+- name: Start the bulk libvirt storage pool
+  community.libvirt.virt_pool:
+    name: "{{ bulk_storage_libvirt_pool_name }}"
+    state: active
+
+# Separate task for the same reason as the SSD pool in host_prereqs: virt_pool
+# honours one action per invocation, and combining state with autostart applies
+# only the state, silently.
+- name: Autostart the bulk libvirt storage pool
+  community.libvirt.virt_pool:
+    name: "{{ bulk_storage_libvirt_pool_name }}"
+    autostart: true

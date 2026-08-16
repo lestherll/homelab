@@ -1,0 +1,95 @@
+---
+# --- Hypervisor layer (docs/talos-terraform-migration-notes.md) -------------
+# Ubuntu stays on the metal and becomes a hypervisor; Terraform provisions a
+# single Talos VM under libvirt/KVM. This role owns the *metal* — packages,
+# network, and the SSD-backed storage pool. It deliberately does NOT own the
+# HDD-backed pool: that one lives in bulk_storage, behind the mount assert, for
+# the reason spelled out there.
+
+# python3-libvirt and python3-lxml are not hypervisor components — they are what
+# community.libvirt's virt_net/virt_pool modules import. Both fail at import
+# time with a message naming the Python module rather than the apt package, and
+# they fail *separately*: satisfying the libvirt binding gets you as far as the
+# next task, which then asks for lxml. Neither is listed as a dependency of the
+# collection itself.
+# ovmf provides UEFI firmware: Talos boots UEFI, and there is no BIOS fallback
+# worth arranging for a machine we control end to end.
+#
+# qemu-system-x86 rather than qemu-kvm: on Ubuntu 26.04 qemu-kvm is a *virtual*
+# package with two providers and no default, so apt refuses it outright
+# ("has no installation candidate") rather than picking one. Naming the real
+# package is the fix, and it also makes the choice between the two providers
+# explicit rather than implicit:
+#   qemu-system-x86      1:10.2.1+ds-1ubuntu3.2  <- this one
+#   qemu-system-x86-hwe  1:10.2.1+ds-1ubuntu4.3
+# The non-hwe build is on the same release series as the libvirt packages
+# alongside it; the hwe variant tracks a newer kernel-enablement stack, which is
+# a second moving part to no benefit on a host whose hardware is fixed.
+hypervisor_packages:
+  - qemu-system-x86
+  - qemu-utils
+  - libvirt-daemon-system
+  - libvirt-clients
+  - virtinst
+  - ovmf
+  - python3-libvirt
+  - python3-lxml
+
+# One libvirt storage pool per *physical* disk, which is the whole point: the
+# host is the only layer in this design that knows a disk from a disk. Terraform
+# picks a pool by role ("put the bulk volume on the bulk pool"), Talos then sees
+# only virtual block devices and selects them by serial. See the storage design
+# section of the migration notes.
+#
+# THE SAFETY RULE: these paths must never fall under k3s's data directories
+# (/var/lib/rancher/k3s/storage, /mnt/storage/k8s-volumes). k3s is stopped but
+# not destroyed during the migration, and `systemctl start k3s` is the fallback
+# for every failure in this plan — writing a VM image into those trees would
+# destroy that fallback silently, with no error at the time.
+libvirt_ssd_pool_name: homelab-ssd
+libvirt_ssd_pool_path: /var/lib/libvirt/images
+
+# Routed/NAT rather than bridged, per Q11/Q12. Bridged would give the VM its own
+# LAN address, which host ufw cannot filter — that would discard the tailnet-only
+# posture the ufw rules below deliberately build. NAT keeps every ufw rule
+# meaningful, keeps the VM unreachable from the LAN, and gives the VM a stable
+# address known *before* bootstrap, which is what cluster.apiServer.certSANs
+# needs (the chicken-and-egg in Q12).
+libvirt_talos_network_name: talos
+# Bridge names are capped at IFNAMSIZ (15 chars) by the kernel, not by libvirt —
+# a longer name fails at bridge creation, not at define time.
+libvirt_talos_network_bridge: virbr-talos
+#
+# 10.10.0.0/24 IS NOT ARBITRARY — do not renumber casually. It has to miss
+# every one of these, and the first attempt (10.100.0.0/24) did not:
+#
+#   10.96.0.0/12    Kubernetes default SERVICE CIDR  <- 10.100.0.0/24 sits
+#                                                       inside this one
+#   10.244.0.0/16   Kubernetes default POD CIDR
+#   10.42.0.0/24    the existing k3s pod CIDR
+#   192.168.0.0/24  the house LAN
+#   192.168.122.0/24 libvirt's own `default` network
+#   100.64.0.0/10   Tailscale
+#
+# The overlap failure is nasty because nothing errors: the VM boots, gets its
+# address, answers the Talos API, and then etcd waits forever on "Waiting for
+# etcd spec" with no stated cause. The reason is only visible in
+# `talosctl dmesg | grep diagnostic` — "host and Kubernetes pod/service CIDR
+# addresses overlap". Talos ships a diagnostic for it precisely because it is
+# so easy to hit and so hard to read backwards from the symptom.
+libvirt_talos_network_host_ip: 10.10.0.1
+libvirt_talos_network_netmask: 255.255.255.0
+
+# The control-plane VM's address is a *reservation*, not a lease from the pool:
+# it sits outside the dynamic range on purpose. Talos also pins this statically
+# in machine config, but the reservation is what answers for it in maintenance
+# mode — before any machine config exists — which is the window in which the
+# node has to be reachable for `talosctl apply-config` to land at all.
+libvirt_talos_dhcp_range_start: 10.10.0.100
+libvirt_talos_dhcp_range_end: 10.10.0.200
+talos_cp_hostname: talos-cp-01
+talos_cp_ip: 10.10.0.10
+# Fixed, in the QEMU OUI (52:54:00). Must be fixed rather than generated: it is
+# the key the DHCP reservation above matches on, so Terraform sets this exact
+# value on the domain's interface.
+talos_cp_mac: "52:54:00:7a:10:5e"
