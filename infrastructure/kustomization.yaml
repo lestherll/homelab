@@ -12,4 +12,5 @@ resources:
   - postgres
   - kro
   - seaweedfs
-  - platform-api
+  # platform-api is deliberately NOT here — its RGDs need kro's CRD, which this
+  # same Kustomization installs. See clusters/homelab/infrastructure-platform-api.yaml.
