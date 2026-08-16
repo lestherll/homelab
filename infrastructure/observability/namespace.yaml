@@ -1,4 +1,22 @@
+# The PodSecurity label is load-bearing, for the same reason it is on the
+# `storage` namespace. Talos enforces the `baseline` profile by default, and
+# node-exporter is the least baseline-compatible thing this platform runs: it
+# sets hostNetwork and hostPID, bind-mounts /proc, /sys and / as hostPath
+# volumes, and binds hostPort 9100. Under baseline the DaemonSet's pods are
+# rejected at admission and none is ever created.
+#
+# The symptom is indirect and worth knowing. The DaemonSet exists with DESIRED 1
+# and CURRENT 0, `kubectl get pods -n observability` shows no node-exporter pod
+# at all to inspect, and what actually fails is the *HelmRelease*, which times
+# out after five minutes waiting for the DaemonSet and then Stalls with
+# RetriesExceeded — so it reads as a chart or timeout problem rather than an
+# admission one. The real message is only in `kubectl describe ds`.
+#
+# k3s never needed this: it ships no PodSecurity enforcement by default, so the
+# same chart installed clean there. It is a Talos-only requirement.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: observability
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
