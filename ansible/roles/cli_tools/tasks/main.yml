@@ -187,3 +187,66 @@
       --bin-dir {{ cli_tools_install_dir }}
   when: awscli_needs_install
   changed_when: true
+
+# --- talosctl: pinned GitHub release binary, checksum-verified -------------
+# Machine-level CLI for the Talos VM. Note this is the *only* tool in this role
+# that is not about talking to Kubernetes or its data services — it talks to
+# the machine underneath, over Talos's API on :50000, and it is what replaces
+# `ssh` on a node that has no shell.
+
+- name: Check installed talosctl version
+  ansible.builtin.command: talosctl version --client
+  register: talosctl_installed
+  changed_when: false
+  failed_when: false
+
+- name: Determine whether talosctl needs (re)install
+  ansible.builtin.set_fact:
+    talosctl_needs_install: "{{ ('v' + talos_version) not in (talosctl_installed.stdout | default('')) }}"
+
+- name: Download and checksum-verify talosctl binary
+  ansible.builtin.get_url:
+    url: "https://github.com/siderolabs/talos/releases/download/v{{ talos_version }}/talosctl-linux-{{ cli_tools_arch }}"
+    dest: "{{ cli_tools_install_dir }}/talosctl"
+    checksum: "sha256:https://github.com/siderolabs/talos/releases/download/v{{ talos_version }}/sha256sum.txt"
+    mode: "0755"
+  when: talosctl_needs_install
+
+# --- terraform: pinned HashiCorp release zip, checksum-verified ------------
+# Not a GitHub release: HashiCorp publishes to releases.hashicorp.com, and the
+# SHA256SUMS file there keys on the zip's own filename, which is why this needs
+# no special-casing unlike awscli's detached-signature-only distribution.
+
+- name: Check installed terraform version
+  ansible.builtin.command: terraform version
+  register: terraform_installed
+  changed_when: false
+  failed_when: false
+
+- name: Determine whether terraform needs (re)install
+  ansible.builtin.set_fact:
+    terraform_needs_install: "{{ ('v' + terraform_version) not in (terraform_installed.stdout | default('')) }}"
+
+- name: Install unzip (required by unarchive to extract the terraform zip)
+  ansible.builtin.apt:
+    name: unzip
+    state: present
+    update_cache: true
+  when: terraform_needs_install
+
+- name: Download and checksum-verify terraform release zip
+  ansible.builtin.get_url:
+    url: "https://releases.hashicorp.com/terraform/{{ terraform_version }}/terraform_{{ terraform_version }}_linux_{{ cli_tools_arch }}.zip"
+    dest: "/tmp/terraform_{{ terraform_version }}_linux_{{ cli_tools_arch }}.zip"
+    checksum: "sha256:https://releases.hashicorp.com/terraform/{{ terraform_version }}/terraform_{{ terraform_version }}_SHA256SUMS"
+    mode: "0644"
+  when: terraform_needs_install
+
+- name: Extract and install terraform binary
+  ansible.builtin.unarchive:
+    src: "/tmp/terraform_{{ terraform_version }}_linux_{{ cli_tools_arch }}.zip"
+    dest: "{{ cli_tools_install_dir }}"
+    include: [terraform]
+    remote_src: true
+    mode: "0755"
+  when: terraform_needs_install
