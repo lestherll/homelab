@@ -30,6 +30,23 @@ out to be false. Version claims in this document were verified against upstream
 release history on 2026-08-16 and are dated where they appear — re-check before
 relying on them, per the repo's pinning convention.
 
+**Third revision (2026-08-16, same day).** Two operator decisions collapsed a
+large part of the plan:
+
+1. **The migration is greenfield** — the current cluster's data is PoC material
+   and is not being migrated. Backups stop gating cutover; the whole
+   dump/restore runbook goes away.
+2. **k3s is stopped, not run in parallel**, giving the VM the whole machine.
+
+Together these dissolve the two questions that had been ranked most decisive
+(Q27 memory contention, Q28 hostname collision) and replace the parallel-platform
+phase with a simpler and safer one — see
+[The fallback model](#the-fallback-model-stopped-not-destroyed). What remains to
+decide before starting is collected under
+[Prerequisites to start](#prerequisites-to-start); how platform work itself
+changes afterwards is under
+[Platform development after the move](#platform-development-after-the-move).
+
 ## Answers locked in (2026-08-15)
 
 Four forks were put to the operator; the answers shape everything below:
@@ -43,9 +60,22 @@ Four forks were put to the operator; the answers shape everything below:
 3. **Power metrics:** keep. The RAPL udev+GID-600 mechanism is not expressible
    in Talos machine config, so a small privileged DaemonSet workaround ships
    with the migration.
-4. **Data safety:** one-shot hand migration (pg_dump / s3 sync / rsync), not a
-   backup build-out first. LES-68 stays open; building real backups is the
-   named immediate follow-up.
+4. ~~**Data safety:** one-shot hand migration (pg_dump / s3 sync / rsync)~~
+   **Superseded 2026-08-16: the migration is greenfield.** Everything on the
+   current cluster is PoC/experimentation data and is explicitly not worth
+   migrating. No pg_dump, no s3 sync, no rsync. Two consequences worth stating
+   plainly rather than discovering later:
+   - **Backups stop being a cutover gate** (revising correction 3 below). They
+     do *not* stop being platform work — C6/C9 still call real CNPG backups a
+     must, and D8/S3 still want the rebuild to double as a verified restore
+     test. LES-68 remains open on its own merits, just not on this critical
+     path.
+   - **The one exception worth ten minutes:** VictoriaMetrics holds the
+     long-term `node_rapl_*` power history (Prometheus is D4-disposable by
+     design and is *not* the store that matters here). It sits on
+     `local-path-bulk`, where the entire disk is 4.6M used — so copying it out
+     is close to free. Optional, but the cheapest thing on this list and the
+     only history that cannot be regenerated.
 
 ## Verdict
 
@@ -255,8 +285,9 @@ redesign.
 ### Sparse images, not preallocated ones
 
 `/` has 61G free (measured 2026-08-16: 106G total, 40G used). The `system` and
-`fast` images both live there, and during the parallel phase k3s is still
-running and has not yet returned its ~13G of uncollected containerd layers.
+`fast` images both live there. k3s is stopped rather than deleted at cutover,
+so its ~13G of uncollected containerd layers are still occupying `/` until
+Phase 5 — the sizing has to assume they are present.
 
 Create both with `qemu-img create -f raw`, which produces a **sparse** file on
 ext4: it consumes only blocks actually written, while keeping raw's performance
@@ -373,11 +404,78 @@ already accepted; it moves into a container or becomes an endpoint on the app.
 - **Q6** narrowed: only the *system* disk's growth story still matters, since
   persistent data no longer lives there and `grow` handles expansion.
 - **Q26** largely moot: sparse images mean declared size stops competing with
-  the 61G during the parallel phase.
+  the 61G while k3s's data is still on disk.
 - **Forced change #1** grows: the SSD needs **two** provisioner instances, not
   one, because `local-path` and `local-path-retain` are served today by a single
   instance with a single `nodePathMap` and the new design gives them different
   disks. The repo has already proven this pattern once with the bulk tier.
+
+## The fallback model: stopped, not destroyed
+
+Decided 2026-08-16, and it replaces the "parallel platform" idea the exploration
+plan was originally built around. The two clusters do **not** need to run
+simultaneously with full platforms — which is fortunate, because Q27 says they
+cannot.
+
+> **Stopping k3s is reversible. Re-imaging is not.**
+
+`systemctl stop k3s` frees the entire 15Gi for the Talos VM while leaving every
+byte where it was: `/var/lib/rancher/k3s/storage` and `/mnt/storage/k8s-volumes`
+both remain intact on disk. If the VM fails at any point, `systemctl start k3s`
+restores the old cluster in seconds.
+
+This is strictly better than both shapes considered before it. Alternative A's
+full resource budget, *and* the fallback that was the primary justification for
+the hypervisor direction — without needing either cluster to run degraded.
+
+**The one hard safety rule of this migration:**
+
+> **Never write into k3s's data paths.** VM images live at dedicated locations
+> on each disk — never under `/var/lib/rancher/k3s/storage`, never under
+> `/mnt/storage/k8s-volumes`.
+
+Violating it destroys the fallback silently, with no error at the time. Every
+other mistake in this plan is recoverable; this one is not. It is also the
+reason the `bulk_storage` mount assert matters more than ever: an unmounted
+`/mnt/storage` at image-creation time puts the bulk image on the SSD *and* means
+the path you thought you were avoiding is not the path you actually wrote to.
+
+**k3s only stops at Phase 3.** With ~8Gi available today, a 4Gi sandbox VM runs
+alongside the live cluster, so every derisking phase — including the storage
+lifecycle rehearsal that proves the architecture — completes with the cluster
+still serving. The stop happens once, late, after the design is known to work.
+
+**The point of no return is Phase 5**, when k3s's data directories are finally
+deleted. That is a deliberate act taken when confident, not a side effect of
+cutover.
+
+## Prerequisites to start
+
+Nothing here exists yet — the host has no qemu, libvirt, talosctl or Terraform
+installed (checked 2026-08-16). It does have 16 threads with virtualisation
+extensions, 15Gi RAM and 8Gi swap.
+
+**Decisions — no code, but each blocks a later phase:**
+
+| Decision | Blocks | Leaning |
+|---|---|---|
+| State strategy (Q4) | Phase 2 | OpenTofu, to keep D12 intact |
+| Networking mode (Q11/Q12) | machine config | Routed + static IP |
+| Tailscale placement (Q13) | Image Factory schematic | Host-only |
+| Flux bootstrap owner (correction 8) | Phase 2 module shape | Separate step |
+| Talos + Kubernetes versions | everything downstream | pin + date, per convention |
+| Default StorageClass | `infrastructure/storage/` | none — see above |
+
+**Host prep (`host_prereqs`, plus `cli_tools`):** qemu-kvm,
+libvirt-daemon-system, virtinst, OVMF; operator in the `libvirt` group; two
+libvirt storage pools, one per physical disk, at paths that obey the safety
+rule above; the routed network definition and matching ufw rules; VM autostart
+policy (Q5). `cli_tools` gains `talosctl` and the chosen Terraform/OpenTofu
+binary, both pinned with a re-verified date.
+
+**Empirical unknowns — all Phase 1, all cheap:** RAPL absence in the guest; a
+libvirt-set disk `<serial>` visible to Talos and matchable by CEL; measured idle
+memory; guest-agent graceful shutdown; VM autostart across a host reboot.
 
 ## Exploration plan
 
@@ -439,37 +537,41 @@ on serial rather than enumeration order; `terraform destroy` provably cannot
 take the data disks with it. **If this fails, the whole virtualised direction
 is worth less than Alternative A** — so run it before building anything on top.
 
-**Phase 3 — Parallel platform.** Point a branch's Flux at the sandbox VM and
-bring up `infrastructure/` for real, using **temporary tailscale hostnames**
-(Q28). Land the forced `infrastructure/` changes. Bring workloads up in
-dependency order — metrics-server, then CNPG, then SeaweedFS, then one
-`Application`.
+**Phase 3 — Stop k3s and build the real cluster.** `systemctl stop k3s` (and
+disable it, so a host reboot mid-migration doesn't resurrect it competing for
+the same tailnet hostnames). Rebuild the VM at full size with the whole machine
+available. Point Flux at it and bring `infrastructure/` up for real, in
+dependency order: metrics-server → CNPG → SeaweedFS → one `Application` →
+observability.
 
-**Do not bring observability up on the new cluster during this phase.** It does
-not fit in 15Gi alongside k3s's (Q27), and trying is how the parallel phase
-fails. Observability comes up on the new cluster *after* cutover, which means
-accepting a window with no in-cluster metrics.
+Because the migration is greenfield, **no temporary tailscale hostnames are
+needed** (Q28 dissolves): k3s is stopped, so its exposures are gone and the real
+hostnames are free. Expect ~4 fresh Let's Encrypt issuances and prune the stale
+`ts-*` devices in the tailnet admin console; no loops, so no failed-authorization
+risk per `external-consumer-access-notes.md`.
 
-That window is survivable because of a property this design already has for
-unrelated reasons: **node-exporter, the RAPL power metrics and the heartbeat
-watchdog all live on the Ubuntu host, outside both clusters.** They keep working
-straight through cutover. Host health, power and the dead-man's switch never go
-dark; only in-cluster metrics do, and only until Flux reconciles the
-observability stack on the far side. The host-side observability relocation was
-adopted to solve a measurement-correctness problem — that it also makes a blind
-cutover window safe is a reinforcing property worth relying on deliberately.
+Observability comes up last because it is the memory hog and the thing least
+needed while everything else is being proven. Note the window without in-cluster
+metrics is well covered: **node-exporter, the RAPL power metrics and the
+heartbeat watchdog all live on the Ubuntu host**, outside both clusters, and run
+straight through. Host health, power and the dead-man's switch never go dark.
+The host-side relocation was adopted to fix measurement correctness; that it
+also covers the cutover window is a second thing it buys.
 
-Exit: data services and one `Application` healthy on the new cluster; Q18's
-relabelling landed (quantified back in Phase 0); both clusters coexisting within
-15Gi with measured headroom recorded.
+Exit: `infrastructure/` fully reconciled on Talos; all four ingresses serving
+TLS; `node_scrape_collector_success{collector="rapl"} == 1` off the *host*
+exporter; power dashboards live; Q18's relabelling holding in practice.
 
-**Phase 4 — Cutover.** Backups first (see cost sheet), then the data move.
-Reuse Alternative A's runbook, minus the re-image step and with the old
-cluster intact as fallback.
+**Phase 4 — Verify and live on it.** Recreate the `Database`/`ObjectStorage`/
+`Application` instances for the app repos — empty, no restore, since the
+migration is greenfield. Run on it long enough to trust it. k3s stays stopped
+but restorable throughout.
 
-**Phase 5 — Aftermath.** Delete `k3s_server`; rewrite the surviving roles;
-update AGENT.md, `storage-tiering-notes.md` paths, CONCEPT.md (new decision +
-D3 amendment).
+**Phase 5 — Aftermath and the point of no return.** Only once confident: delete
+k3s's data directories, reclaiming ~13G of uncollected containerd layers along
+with them. Delete the `k3s_server` role; rewrite the surviving roles; update
+AGENT.md, `storage-tiering-notes.md` paths, and CONCEPT.md (new decision, D3
+amendment, D8 amendment per Q8).
 
 ### Do this sooner rather than later
 
@@ -480,29 +582,100 @@ steadily more expensive as SeaweedFS and VictoriaMetrics accumulate history.
 
 ## Feasibility: what could actually stop this
 
-Ranked, 2026-08-16. Note the top slot changed: it used to be storage.
+Ranked, 2026-08-16. The list has been through two reorderings in one day, which
+is itself the useful record — see the demotions at the end.
 
-1. **Memory during the parallel phase.** The binding constraint. 15Gi total,
-   ~9.8Gi available, and a VM's allocation is spent rather than shared. Resolved
-   in the plan by not duplicating observability (Phase 3) and possibly softened
-   by ballooning (Q27) — but if a Talos VM running the data services turns out
-   to want meaningfully more than ~7Gi, the parallel phase is not affordable and
-   the direction collapses back toward Alternative A's riskier one-shot cutover.
-   **Phase 1's measured idle footprint is the number that decides this**, which
-   is another reason to run Phase 1 early and cheaply.
-2. **Q18, the node-exporter relabelling.** The only major risk that fails
-   silently. Now pulled forward into Phase 0 for exactly that reason.
-3. **RAPL absence in the guest.** Load-bearing for the whole observability
-   redesign and still only asserted. Cheap to verify; Phase 1.
-4. **The libvirt provider's 0.9 rewrite.** Real but bounded — pinning plus
-   Phase 2 is the mitigation, and the fallbacks in Q1 exist.
+1. **Q18, the node-exporter relabelling.** Now the top risk, and the only major
+   one that fails *silently* — a panel quietly showing nothing rather than an
+   error. Pulled forward into Phase 0 for exactly that reason; it needs no Talos
+   work and is testable today.
+2. **RAPL absence in the guest.** Load-bearing for the whole observability
+   redesign and still only asserted by this document. Cheap to verify; do it
+   first within Phase 1.
+3. **The libvirt provider's 0.9 rewrite.** Real but bounded — pinning plus
+   Phase 2 is the mitigation, and Q1's fallbacks exist if it disappoints.
+4. **Two layers to debug.** Not a discrete risk, a standing tax. Named because
+   it is the cost that does not go away after cutover.
 
-**No longer a top risk:** Talos adopting the populated whole-disk-ext4
-`/dev/sda`, previously called this migration's "single biggest technical
-unknown". File-backed images removed it — the host keeps owning the physical
-filesystem and Talos only ever meets clean virtual block devices. Record the
-swap explicitly, because the phase ordering should follow the risk: the biggest
-unknown moved from storage to memory.
+**Demoted — and worth recording why, since both were once called the single
+biggest unknown:**
+
+- **Talos adopting the populated whole-disk-ext4 `/dev/sda`.** Removed entirely
+  by file-backed images: the host keeps owning the physical filesystem and Talos
+  only ever meets clean virtual block devices.
+- **Memory.** Was the binding constraint while the plan assumed two full
+  platforms running in parallel. The stopped-not-destroyed fallback removes the
+  contention: k3s is stopped before the real VM is built, so the VM gets the
+  whole machine. What remains is a sizing question, not a feasibility one.
+
+The lesson to carry: both were artifacts of a plan shape, not of the target
+architecture. Changing the shape dissolved them. Phase ordering should keep
+following the risk rather than the build order.
+
+## Platform development after the move
+
+The question this has to answer is not "can apps still run" — it's how *platform*
+work feels afterwards, since D16 and further data services are the work actually
+remaining. Short version: the operator workflow is mostly unchanged, one thing
+gets substantially better, and one thing gets worse.
+
+**Unchanged, because the host survives.** Unlike Alternative A, `cli_tools`
+lives on: `sops`, `flux`, `helm`, `kubectl`, `kubectl-cnpg`, `age` and `awscli`
+all stay where they are, on a machine that is still SSH-able over the tailnet.
+The suspend-Flux-and-hand-apply loop for testing unmerged changes works exactly
+as it does today. Editing an RGD and watching kro reconcile is identical. The
+only addition is `talosctl` for machine-level operations.
+
+**Substantially better: cold-apply becomes testable.** This is the real payoff
+for the work that remains, and it deserves to be stated as a design goal rather
+than discovered as a side effect.
+
+`self-service-platform-design-notes.md`'s implementation log records a whole
+class of bug that only appears when reconciling from *nothing* — the
+`seaweedfs-runtime` Kustomization exists as a separate Flux Kustomization
+precisely because pairing a HelmRelease with CRD-dependent raw manifests
+deadlocks on cold apply. Today that class of bug is discoverable only by
+accident, because there is no way to get a cold cluster short of rebuilding k3s
+by hand.
+
+After the move, `terraform destroy && terraform apply` produces a clean cluster
+in minutes. "Does the platform bootstrap from zero?" changes from an
+unanswerable question into a routine test — and every new RGD, operator and
+data service added from here can be checked against it before it merges. For a
+platform whose remaining roadmap is *more kinds and more services*, that is the
+single largest workflow improvement available.
+
+It also keeps the recovery path rehearsed. Using destroy/recreate as the *dev*
+primitive means D8's tier-1 recovery mechanism gets exercised continuously
+rather than annually. Prefer it over libvirt snapshots for this reason: a
+snapshot is a second mechanism that is not the one you would use in an
+emergency. (Snapshots remain reasonable for the narrower case of testing
+something destructive to *data* — a CNPG major-version upgrade, say — where
+destroy/recreate deliberately preserves what you want to roll back.)
+
+**A dev VM becomes affordable, for a reason the earlier rejection did not
+consider.** "Two single-node clusters on one box" was rejected above on the
+grounds that D7's observability budget applies per cluster and two full stacks
+do not fit in 15Gi. That reasoning holds for two *production* clusters and is
+not revisited here. But a **platform-development** VM is a different
+proposition: it needs no kube-prometheus-stack at all, because nothing about
+testing whether an RGD reconciles or whether an RBAC aggregation grant is
+sufficient requires Prometheus. A 3–4Gi observability-free dev VM fits
+comfortably once k3s is gone, and it is the natural home for exactly the work
+that remains — new kinds, the `rbac-kro-aggregate.yaml` grants that must
+accompany them, and cold-apply testing that would otherwise disturb the real
+cluster. Worth building in Phase 5 rather than deferring to hardware that has
+not arrived.
+
+**Worse: no shell on the node.** Today, inspecting a local-path PV is
+`sudo ls /var/lib/rancher/k3s/storage/...`. On Talos there is no shell and no
+SSH — the equivalent is a privileged debug pod mounting the hostPath, or
+`talosctl ls`/`talosctl read`. This is a genuine regression for storage
+debugging specifically, and storage is where this platform's more interesting
+failures have historically been (see the volume-migration runbook in
+`storage-tiering-notes.md`). Not a blocker, but budget for it being clumsier,
+and consider keeping a documented debug-pod manifest in the repo rather than
+reinventing it under pressure.
 
 ## Remaining DX gaps (not fixed by this migration)
 
@@ -659,9 +832,9 @@ it in.
     SeaweedFS volume data on a 5400rpm spindle. Likely dominated by the disk
     itself, but measure rather than assume.
 22. File-backed images vs raw block passthrough of `/dev/sda`. File-backed is
-    preferred: the host keeps `/mnt/storage` mounted so k3s can keep running
-    during the parallel phase, **and** Talos never meets the awkward
-    whole-disk-ext4-with-no-partition-table layout `/dev/sda` currently has.
+    preferred: the host keeps owning `/mnt/storage`, so k3s's data stays intact
+    and restorable behind the fallback rule, **and** Talos never meets the
+    awkward whole-disk-ext4-with-no-partition-table layout `/dev/sda` has.
 23. Alternative A's forced change #1 still applies, and **grew**: the SSD now
     needs *two* repo-managed provisioner instances (`scratch` on the system
     disk, `fast` on `/var/mnt/fast`), because the single k3s instance served
@@ -682,24 +855,23 @@ it in.
 
 ### F. Migration sequencing
 
-27. **[decisive]** Can k3s and the Talos VM run simultaneously inside 15Gi?
-    Current whole-host usage is 5.3Gi with 9.8Gi available, so a 6–7Gi VM
-    consumes essentially all remaining headroom — and VM memory is **spent, not
-    shared**. This is now the migration's binding constraint (see the
-    feasibility note below); duplicating observability across both clusters does
-    not fit. Two mitigations, which compose:
-    - **Don't duplicate observability at all** — the resolution adopted in
-      Phase 3 above.
-    - **virtio-balloon with free-page-reporting**, so the guest returns unused
-      memory to the host rather than holding its whole allocation. If Talos
-      supports it, the parallel phase stops being a knife-edge. Unverified;
-      a Phase 1 checkbox.
-28. **[decisive]** Two clusters cannot both serve
-    `grafana.tailf4742d.ts.net`. Temporary hostnames during the parallel
-    phase, or accept downtime at switchover — and note AGENT.md's
-    failed-authorization limit makes retry-driven flailing actively harmful.
-29. Backups (LES-68) **before** cutover, not after. See the corrections
-    section.
+27. ~~**[decisive]** Can k3s and the Talos VM run simultaneously inside 15Gi?~~
+    **Dissolved by the stopped-not-destroyed fallback** — they never need to.
+    A 4Gi sandbox VM coexists with live k3s through Phase 2.5 (~8Gi available),
+    and the real VM is built only after k3s stops. What survives is a *sizing*
+    question answered by Phase 1's measured idle footprint, not a feasibility
+    one. **virtio-balloon with free-page-reporting** stays worth a Phase 1
+    checkbox — less because it is needed now, more because it is what makes a
+    second dev VM comfortable later.
+28. ~~**[decisive]** Two clusters cannot both serve
+    `grafana.tailf4742d.ts.net`.~~ **Dissolved for the same reason** — k3s is
+    stopped before the real VM is built, so its exposures are gone and the real
+    hostnames are free. No temporary hostnames, no switchover downtime beyond
+    the rebuild itself. AGENT.md's failed-authorization warning still applies to
+    the ~4 fresh issuances: let them succeed once, don't retry into the limit.
+29. ~~Backups (LES-68) before cutover.~~ **No longer a gate** — greenfield
+    migration; see locked-in answer #4 and correction 3. Still open as platform
+    work, and the one optional data item is VictoriaMetrics' power history.
 
 ## Reading list
 
@@ -764,12 +936,15 @@ which direction wins.
    two-pass step, or keeping the old tailnet node alive to reclaim its
    address. (Under the primary direction this is Q12, and routed networking
    largely dissolves it.)
-3. **Backup ordering contradicts the D8 citation.** The verdict quotes "the
-   rebuild is the tier-1 upgrade mechanism" as support, then makes the
-   cutover's only safety net a one-shot hand dump with LES-68 left open. D8/S3's
-   point is that a rebuild doubles as a *verified restore test*, which requires
-   the restore path to exist first. Build CNPG backups **before** cutover; it
-   converts the riskiest step into a rehearsal of something routine.
+3. ~~**Backup ordering contradicts the D8 citation.**~~ **Withdrawn as a
+   cutover gate, 2026-08-16** — the migration is greenfield (locked-in answer
+   #4), so there is no data whose loss the backup would prevent, and the
+   fallback is `systemctl start k3s` rather than a restore. The *argument*
+   still stands on its own though, and outlives this migration: D8/S3's point
+   is that a rebuild doubles as a verified restore test, which requires the
+   restore path to exist first. Once the platform holds data worth keeping,
+   LES-68 stops being follow-up work and becomes a precondition for claiming
+   D8 is realised at all.
 4. **Step 2's "single biggest technical unknown" is overstated and
    under-mitigated.** It cannot be rehearsed in a VM without the actual disk —
    only against a synthetic proxy. But it is also less frightening than
@@ -840,6 +1015,12 @@ storage.
 Superseded as the primary direction, retained in full. The coupling audit,
 mapping table and forced `infrastructure/` changes below remain accurate and
 mostly still apply to the virtualised design; the corrections above apply here.
+
+**Two things below are now historical rather than planned:** the cutover
+runbook's dump/restore steps (the migration is greenfield — locked-in answer
+#4) and its framing of verified dumps as the safety net (the fallback is now
+`systemctl start k3s`). Read them as a record of the bare-metal plan, not as
+instructions.
 
 ## What moves where (Ansible → Talos/Terraform mapping)
 
