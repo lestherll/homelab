@@ -42,6 +42,23 @@ metadata:
 spec:
   # Every endpoint, including ones in namespaces that do not exist yet.
   endpointSelector: {}
+  # LOAD-BEARING, and the whole cluster breaks without it.
+  #
+  # Cilium turns on default-deny for any direction a policy writes rules in, and
+  # `endpointSelector: {}` selects every endpoint in the cluster. So without
+  # this field, adding this "allow" policy silently puts EVERY POD into ingress
+  # default-deny with a single permitted source — the node — and nothing in the
+  # cluster can talk to anything else.
+  #
+  # That is not a thought experiment; it is what the first version of this file
+  # did. The visible symptom was not "policy too strict", it was DNS: every Flux
+  # controller failing with `lookup source-controller.flux-system.svc... on
+  # 10.96.0.10:53: i/o timeout`, because CoreDNS had also just been put into
+  # default-deny and was refusing them. Reach for this whenever a broad
+  # `endpointSelector` is paired with an allow rule.
+  enableDefaultDeny:
+    ingress: false
+    egress: false
   ingress:
     - fromCIDR:
         - 10.244.0.1/32
