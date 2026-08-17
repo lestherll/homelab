@@ -25,6 +25,10 @@ spec:
   # as the message text, which — as with the Alertmanager receiver — means a
   # readable but unpretty notification. Consistent with that path on purpose:
   # one rough edge to fix once, in one place, if it ever becomes worth fixing.
+  #
+  # The title and priority live in the referenced Secret, not here: the Provider
+  # API takes custom headers only via its Secret. Nothing about them is secret,
+  # and the reasoning for the values is written down beside them there.
   type: generic
   secretRef:
     name: ntfy
