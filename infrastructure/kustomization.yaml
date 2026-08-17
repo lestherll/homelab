@@ -10,8 +10,10 @@ resources:
   - tailscale-operator
   - observability
   - victoria-metrics
-  - fastapi-echo
-  - personal-finance-dashboard
+  # No per-app entries, and there should never be one again: an app's Flux
+  # pointer objects are created by the app repo's own CI (see app-registrar
+  # below and docs/zero-touch-app-registration.md). A directory here named
+  # after an application means that feature has regressed.
   - storage
   - postgres
   - kro
