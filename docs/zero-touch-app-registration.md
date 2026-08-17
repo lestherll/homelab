@@ -43,16 +43,83 @@ names. The admission policy does exactly that, generically, by reading the
 claim GitHub signed. **It is the security boundary between app repos; the Role
 is not.**
 
+## One-time setup: the `tag:ci` trust credential
+
+Link 2 of the chain — joining the tailnet — needs a Tailscale credential that
+GitHub Actions can federate into. This is the one piece of the feature that
+lives in the admin console rather than in git, because Tailscale's trust
+credentials are not expressible in `policy.hujson`.
+
+It is created **once for the whole account**, not once per app; that is what
+keeps onboarding zero-touch. In **Settings → Trust credentials → New
+credential → OpenID Connect**:
+
+- **Issuer**: GitHub Actions
+- **Subject**: `repo:lestherll@37829703/*:ref:refs/heads/main`
+
+  Same ID-based shape as the ACL credential in `tailscale-acl/README.md` — see
+  there for why the `@<id>` suffixes are not optional. Two halves matter
+  independently.
+
+  The `*` is what makes one credential cover every current *and future* app
+  repo, which is the whole reason onboarding stays zero-touch. Tailscale
+  matches subject patterns with `*` against any character in any position, not
+  just as a trailing wildcard. It is safe against a cleverly-named repo because
+  GitHub signs the `lestherll@37829703/` prefix; nothing a repo is called can
+  forge it.
+
+  The `:ref:refs/heads/main` tail restricts this to main-branch runs, so no
+  pull-request job in any of these repos can obtain a `tag:ci` node. Both
+  triggers of the registration workflow — push to `main` and
+  `workflow_dispatch` on `main` — mint exactly that ref, so nothing legitimate
+  is excluded. Note this does mean a `workflow_dispatch` teardown run from a
+  branch will fail at token exchange.
+- **Scopes**: `auth_keys` (write), and nothing else. This is the scope
+  `tailscale/github-action` needs to mint the ephemeral node key; the
+  credential must not be able to read devices or touch the policy file.
+  Resist adding `devices:core` — it grants read/write over every device on
+  the tailnet, which is a far worse trade than anything it buys back.
+- **Tags**: `tag:ci`, and the console **requires** this for a write scope
+  rather than merely offering it. Auth keys from this credential may only tag
+  devices with these exact tags or tags those manage, which is a second bound,
+  independent of the cluster's: a compromised app-repo workflow cannot join as
+  `tag:k8s` and start claiming the apiserver service.
+
+  If the tag dropdown comes up empty, the tag is missing from the *live*
+  policy rather than from the form — `policy.hujson` on an unmerged branch has
+  changed nothing, and a console tab opened before the last apply shows a
+  stale list. Reload before suspecting anything else.
+
+Copy the generated **Client ID** and **Audience** into each app repo's Actions
+secrets as `TS_OAUTH_CLIENT_ID` and `TS_AUDIENCE`, along with
+`HOMELAB_APISERVER` (`kube-apiserver-ci.<tailnet>.ts.net`).
+
+None of the three is really secret — Tailscale's docs say as much about the
+first two, and the third is a hostname that only resolves for a device already
+on the tailnet. They are Actions secrets to keep tailnet-identifying strings
+out of the app repos, which are public.
+
+Note these are the *only* three, and that none of them is a cluster
+credential: link 3 mints one per run.
+
 ## What an app repo adds
 
 One workflow. Object names must equal the repository name — that is what the
 admission policy enforces.
+
+The live copies are `.github/workflows/register.yml` in `fastapi-echo` and
+`personal-finance-dashboard`; copy either verbatim into a new app repo — it
+refers to itself only through `github.*` context, so nothing in it is
+per-app. Abridged:
 
 ```yaml
 name: Register with the platform
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      action: {type: choice, options: [register, teardown], default: register}
 
 permissions:
   contents: read
@@ -63,8 +130,7 @@ jobs:
   register:
     runs-on: ubuntu-latest
     steps:
-      - uses: tailscale/github-action@v4   # v4.1.3 latest as of 2026-08-17;
-                                          # pin to a SHA in the app repo
+      - uses: tailscale/github-action@<sha>   # v4.1.3
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           audience: ${{ secrets.TS_AUDIENCE }}
@@ -80,12 +146,10 @@ jobs:
           echo "token=$token" >> "$GITHUB_OUTPUT"
 
       - name: Register
-        env:
-          TOKEN: ${{ steps.k8s.outputs.token }}
         run: |
-          kubectl --server=https://kube-apiserver-ci.<tailnet>.ts.net \
+          kubectl --server="https://${{ secrets.HOMELAB_APISERVER }}" \
                   --token="$TOKEN" \
-                  apply --server-side -f - <<'YAML'
+                  apply --server-side --force-conflicts -f - <<'YAML'
           apiVersion: source.toolkit.fluxcd.io/v1
           kind: GitRepository
           metadata:
@@ -103,7 +167,7 @@ jobs:
             name: ${{ github.event.repository.name }}
             namespace: flux-system
           spec:
-            interval: 10m
+            interval: 5m
             path: ./deploy
             prune: true
             sourceRef:
@@ -115,9 +179,52 @@ jobs:
 `--server-side` is deliberate: server-side apply needs only `patch`, which
 keeps the Role's verb list honest about what CI actually does.
 
-Teardown is the same workflow behind `workflow_dispatch` running `kubectl
+`--force-conflicts` is deliberate too, and is about **adoption**, not about
+overriding anyone. An object these workflows inherit from a hand-written
+manifest still carries `kustomize-controller` in its `managedFields`, and
+server-side apply refuses to change a field another manager owns. Verified on
+the live cluster: an identical apply co-owns the fields silently, but changing
+so much as `spec.interval` fails with `conflict with "kustomize-controller"`.
+Without the flag the migration below appears to work and then silently stops
+tracking the workflow's edits. Once the object is CI-owned the flag is inert.
+
+Teardown is the same workflow under `workflow_dispatch` running `kubectl
 delete` on the two objects. The admission policy scopes `DELETE` the same way
-it scopes `CREATE`, so a repo can only delete its own.
+it scopes `CREATE`, so a repo can only delete its own. It deletes the
+`Kustomization` first and waits: that object has `prune: true`, so its removal
+is what tears the app's workloads down, and dropping the `GitRepository` first
+would leave Flux unable to resolve the source mid-prune.
+
+## Migrating an app that was registered by hand
+
+`fastapi-echo` and `personal-finance-dashboard` predate this feature — their
+pointer objects were files in `infrastructure/`. Moving one across is not just
+deleting the file, because the `Kustomization` has `prune: true`: Flux
+garbage-collecting it deletes every workload it applied. **A live app goes down
+if this is done in the wrong order.**
+
+The sequence, which is also the rebuild procedure if it ever needs repeating:
+
+1. **Annotate, in its own commit.** Add
+   `kustomize.toolkit.fluxcd.io/prune: disabled` to both objects and merge.
+   Flux reads that annotation off the *live* object when it garbage-collects,
+   so it has to be applied before the file goes away — annotating and deleting
+   in one commit does nothing at all, since Flux never sees the annotation and
+   prunes on the same reconcile.
+2. **Confirm it landed** — `kubectl get kustomization <app> -n flux-system
+   -o jsonpath='{.metadata.annotations}'`. Flux tracks `main`; an unmerged
+   branch has changed nothing.
+3. **Delete the files** in a second commit. The objects drop out of Flux's
+   inventory and stay running, now managed by nobody.
+4. **Run the app repo's registration workflow.** CI adopts both objects.
+5. **Strip the annotation** — `kubectl annotate {gitrepository,kustomization}/<app>
+   -n flux-system kustomize.toolkit.fluxcd.io/prune-`. It described a hand-off
+   that has finished; leaving it makes the object look like it is still opted
+   out of something.
+
+Steps 3 and 4 are the only window where the objects have no manager, and
+nothing prunes them during it — an unmanaged Flux object keeps reconciling
+exactly as before. The order is about avoiding deletion, not downtime.
 
 ## Test matrix
 
