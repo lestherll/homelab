@@ -5,3 +5,10 @@ resources:
   # namespace exempt from its PodSecurity enforcement. See helmrelease.yaml.
   - cni-configuration.yaml
   - helmrelease.yaml
+  # A CiliumClusterwideNetworkPolicy, so its CRD comes from the HelmRelease
+  # directly above it. That is normally the cold-apply deadlock this repo splits
+  # Kustomizations to avoid (see seaweedfs-runtime/) — it is tolerable here only
+  # because the policy is an *allow* with nothing depending on it at apply time:
+  # on a cold cluster it fails, retries, and succeeds once the CRD exists, and
+  # nothing is broken in between because no deny is in force yet either.
+  - allow-node-to-pods.yaml

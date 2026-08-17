@@ -204,6 +204,27 @@ spec:
     grafana:
       admin:
         existingSecret: grafana-admin
+      # Off because it makes Grafana un-restartable, and it is redundant anyway.
+      #
+      # The init container runs `chown -R 472:472 /var/lib/grafana` as root with
+      # `capabilities.drop: [ALL]` plus `add: [CHOWN]` — so it has CHOWN but not
+      # DAC_OVERRIDE, and root without DAC_OVERRIDE cannot traverse a directory
+      # it does not own. On a fresh volume that is fine: the directory is empty
+      # and the chown succeeds. Grafana then creates png/csv/pdf owned by 472
+      # with restrictive modes, and every SUBSEQUENT start fails:
+      #
+      #   chown: /var/lib/grafana/png: Permission denied
+      #
+      # The pod then sits in Init:CrashLoopBackOff while the old replica keeps
+      # serving, so a Deployment simply stops rolling — a latent fault that
+      # surfaces at whatever unrelated moment first recreates the pod. Found
+      # exactly that way, during the rollout restart for the Cilium cutover.
+      #
+      # Redundant because `fsGroup: 472` already gives the volume the right
+      # group ownership: these PVs are hostPath-backed, which is a volume type
+      # the kubelet applies fsGroup to.
+      initChownData:
+        enabled: false
       # The long-term store, as a second datasource. Panels spanning more than
       # the 15d Prometheus window — i.e. every meaningful energy-cost panel —
       # must select this one; short-range/live panels can use either.
