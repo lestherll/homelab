@@ -33,6 +33,51 @@ locals {
   # which keeps a shape mismatch a plan-time error instead of an apply-time one.
   machine_secrets = var.machine_secrets
 
+  # AuthenticationConfiguration replaces the legacy `oidc-*` apiServer flags
+  # below — the two are mutually exclusive, one issuer vs. many, which is why
+  # adding the Google issuer forced migrating the existing GitHub Actions
+  # trust into this file rather than adding it alongside the flags. Delivered
+  # onto Talos's immutable filesystem via machine.files (writes the YAML) +
+  # apiServer.extraVolumes (mounts it into the apiserver static pod) — no
+  # node reboot, but `terraform apply` does restart the apiserver, and its
+  # tailnet proxy is fate-shared with it (see AGENT.md).
+  #
+  # google_operator_email is a Terraform variable, not a literal, because an
+  # operator's personal email is PII this repo's public GitHub OIDC audience
+  # doesn't want committed — mirrors machine_secrets' out-of-band pattern,
+  # supplied via TF_VAR_google_operator_email at apply time.
+  authentication_configuration_yaml = <<-EOT
+    apiVersion: apiserver.config.k8s.io/v1
+    kind: AuthenticationConfiguration
+    jwt:
+      - issuer:
+          url: https://token.actions.githubusercontent.com
+          audiences:
+            - https://github.com/lestherll
+        claimMappings:
+          username:
+            claim: sub
+            prefix: "gha:"
+          groups:
+            claim: repository_owner
+            prefix: "gha:"
+      - issuer:
+          url: https://accounts.google.com
+          audiences:
+            - 223671181580-7798jpn1klsms7jiel4vo6877rtnj81q.apps.googleusercontent.com
+        claimMappings:
+          username:
+            claim: email
+            prefix: "google:"
+          # No groups claim mapped — single user, RBAC binds the username
+          # directly (infrastructure/human-auth/) rather than inventing a group.
+        claimValidationRules:
+          - expression: "claims.email == '${var.google_operator_email}'"
+            message: "only the operator's account may authenticate"
+          - expression: "claims.email_verified == true"
+            message: "unverified email"
+  EOT
+
   # Patches carry everything the provider does not model as a first-class
   # argument. Kept as separate documents rather than one blob so a failing
   # patch names itself.
@@ -146,10 +191,29 @@ locals {
           }
         }
 
-        # Trust GitHub Actions as an OIDC identity provider, so an app repo's
-        # CI can authenticate to this cluster with a token GitHub signs per run
-        # and nothing is ever stored. This is what lets a new app register its
-        # own Flux pointer objects without a commit to this repo.
+        # Trust GitHub Actions and Google as OIDC identity providers — GitHub
+        # so an app repo's CI can authenticate with a token GitHub signs per
+        # run and nothing is ever stored (what lets a new app register its own
+        # Flux pointer objects without a commit to this repo), Google so the
+        # operator can authenticate as themselves rather than through a static
+        # kubeconfig credential. Both issuers, their claim mappings and the
+        # Google email allow-list live in one AuthenticationConfiguration file
+        # (local.authentication_configuration_yaml above) rather than as flags
+        # here — the legacy `oidc-*` extraArgs support exactly one issuer,
+        # which is what forced this migration.
+        #
+        # Identity for the GitHub issuer is the `sub` claim, which GitHub
+        # builds from IDs rather than names:
+        #   repo:<owner>@<owner-id>/<repo>@<repo-id>:<ref>
+        # binding the caller to a specific repository rather than a name that
+        # can be renamed or reused. Groups come from `repository_owner`, so
+        # every repo under this account lands in one group (gha:lestherll)
+        # that RBAC binds once; per-repo isolation deliberately does NOT come
+        # from RBAC, it comes from a ValidatingAdmissionPolicy reading `sub`,
+        # because RBAC cannot express "only the object matching your own
+        # repository name". Both prefixes (`gha:`, `google:`) exist so a claim
+        # value can never collide with a real Kubernetes user or a `system:`
+        # identity.
         #
         # Unlike kube-proxy/CoreDNS/flannel, the apiserver is a Talos STATIC
         # POD, not a bootstrap manifest — so these land on `terraform apply`
@@ -158,43 +222,38 @@ locals {
         # class of change that is not.
         #
         # Risk worth naming: this is a single-node cluster and the apiserver is
-        # a static pod. Malformed args here mean it does not come back, with no
-        # second control plane to fall back on. Recovery is reverting the
+        # a static pod. Malformed config here means it does not come back, with
+        # no second control plane to fall back on. Recovery is reverting the
         # machine config with talosctl, which works because the PKI is in SOPS,
         # not in tfstate.
         apiServer = {
           extraArgs = {
-            oidc-issuer-url = "https://token.actions.githubusercontent.com"
-
-            # The audience CI must mint its token for. Not a secret, but it is
-            # a scoping control: a token GitHub issued for some other service
-            # will not authenticate here, which is what stops a leaked token
-            # from one integration being replayed against the cluster.
-            oidc-client-id = "homelab-k8s"
-
-            # Identity is the `sub` claim, which GitHub builds from IDs rather
-            # than names:
-            #   repo:<owner>@<owner-id>/<repo>@<repo-id>:<ref>
-            # Using it as the username means the caller's identity is bound to
-            # a specific repository and cannot survive that repo being renamed
-            # or its name being reused by someone else.
-            #
-            # The prefix keeps these in their own namespace: without it, a
-            # claim value could collide with a real Kubernetes user or a
-            # system: identity.
-            oidc-username-claim  = "sub"
-            oidc-username-prefix = "gha:"
-
-            # Groups come from `repository_owner`, so every repo under this
-            # account lands in one group (gha:lestherll) that RBAC binds once.
-            # Per-repo isolation deliberately does NOT come from RBAC — it
-            # comes from a ValidatingAdmissionPolicy reading the `sub` above,
-            # because RBAC cannot express "only the object matching your own
-            # repository name".
-            oidc-groups-claim  = "repository_owner"
-            oidc-groups-prefix = "gha:"
+            authentication-config = "/etc/kubernetes/auth/authentication-config.yaml"
           }
+          extraVolumes = [{
+            hostPath  = "/etc/kubernetes/auth"
+            mountPath = "/etc/kubernetes/auth"
+            readonly  = true
+          }]
         }
+      }
+    }),
+
+    # The AuthenticationConfiguration file the apiServer.extraVolumes mount
+    # above serves. A separate patch document from the machine/cluster one
+    # above so a failure here names itself rather than hiding inside the big
+    # patch.
+    yamlencode({
+      machine = {
+        files = [{
+          op   = "create"
+          path = "/etc/kubernetes/auth/authentication-config.yaml"
+          # 384 decimal == 0o600 octal (owner read/write only). yamlencode has
+          # no HCL octal literal to emit, and Talos's Perm field unmarshals a
+          # plain YAML int identically either way.
+          permissions = 384
+          content     = local.authentication_configuration_yaml
+        }]
       }
     }),
 

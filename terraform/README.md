@@ -63,6 +63,10 @@ terraform/scripts/gen-talos-secrets.sh homelab
 # 4. Apply.
 cd terraform/clusters/homelab
 export TF_VAR_machine_secrets="$(sops --decrypt --output-type json machine-secrets.sops.json)"
+# The operator's Google account, allow-listed by the apiserver's
+# AuthenticationConfiguration for the OIDC kubectl path (LES-104). PII, not a
+# credential — not SOPS-encrypted, just kept out of git.
+export TF_VAR_google_operator_email="ljllacuna5@gmail.com"
 terraform init
 terraform apply
 
