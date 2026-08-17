@@ -1,0 +1,82 @@
+# The actual boundary between app repos.
+#
+# RBAC gets CI as far as "may manage Flux pointer objects in flux-system". It
+# cannot go further, because RBAC has no way to relate the caller's identity to
+# the object being acted on. This does: it reads the repository out of the
+# caller's own GitHub-signed `sub` claim and requires the object's name to
+# equal it.
+#
+# This is the load-bearing security control for cross-app isolation. If the CEL
+# below is wrong, isolation is gone while everything still appears to work —
+# so it is written to fail closed and verified with an explicit test matrix
+# (see docs/zero-touch-app-registration.md), not by trying one happy path.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: app-registrar-repo-isolation
+spec:
+  # Deny on evaluation error. A malformed subject, an unexpected claim shape or
+  # a CEL bug must block the request, never wave it through — the failure mode
+  # of the alternative is silent loss of isolation.
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["source.toolkit.fluxcd.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["gitrepositories"]
+      - apiGroups: ["kustomize.toolkit.fluxcd.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["kustomizations"]
+  matchConditions:
+    # Only GitHub Actions identities are governed. Human admins using the Talos
+    # client cert, and Flux's own controllers, are untouched — otherwise this
+    # policy would block the platform from managing its own pointer objects.
+    - name: only-github-actions-identities
+      expression: "request.userInfo.username.startsWith('gha:repo:')"
+  variables:
+    # DELETE carries the object in oldObject; CREATE/UPDATE in object. Exactly
+    # one of the two is populated, so this picks the populated one rather than
+    # assuming.
+    - name: target
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: objectName
+      expression: "variables.target.metadata.name"
+
+    # Subject shape, as GitHub actually mints it (ID-based, not the
+    # repo:owner/repo form most documentation still shows):
+    #   gha:repo:<owner>@<owner-id>/<repo>@<repo-id>:<ref>
+    #
+    # Splitting on "/" is safe even though <ref> contains slashes
+    # (refs/heads/main): the repository is always element [1], because neither
+    # a GitHub owner nor a repository name may contain "/". Trailing elements
+    # from the ref are simply ignored.
+    - name: subjectParts
+      expression: "request.userInfo.username.split('/')"
+    # Guarded rather than indexed blindly: an unexpected subject shape must
+    # produce an empty string and a clean denial, not a CEL index error whose
+    # message says nothing useful.
+    - name: repoName
+      expression: "variables.subjectParts.size() > 1 ? variables.subjectParts[1].split('@')[0] : ''"
+  validations:
+    # Exact equality, deliberately not startsWith/contains. The named failure
+    # case is an identity for `fastapi-echo-evil` reaching an object called
+    # `fastapi-echo`, or the reverse — a substring test permits both.
+    - expression: "variables.repoName != '' && variables.objectName == variables.repoName"
+      messageExpression: "'repository ' + variables.repoName + ' may only manage Flux objects named ' + variables.repoName + '; refusing ' + string(request.operation) + ' on ' + variables.objectName"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: app-registrar-repo-isolation
+spec:
+  policyName: app-registrar-repo-isolation
+  # Deny, not Warn or Audit. There is no staged rollout here: the policy is the
+  # isolation boundary, and a warning-only boundary is not one.
+  validationActions: [Deny]
+  # No matchResources narrowing — the policy's own matchConstraints and
+  # matchConditions already scope this precisely, and repeating them here would
+  # create two places to keep in sync.
+  matchResources: {}

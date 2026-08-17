@@ -145,6 +145,56 @@ locals {
             metrics-bind-address = "0.0.0.0"
           }
         }
+
+        # Trust GitHub Actions as an OIDC identity provider, so an app repo's
+        # CI can authenticate to this cluster with a token GitHub signs per run
+        # and nothing is ever stored. This is what lets a new app register its
+        # own Flux pointer objects without a commit to this repo.
+        #
+        # Unlike kube-proxy/CoreDNS/flannel, the apiserver is a Talos STATIC
+        # POD, not a bootstrap manifest — so these land on `terraform apply`
+        # rather than needing a rebuild. That distinction is the whole reason
+        # this is cheap; see the bootstrap-manifests caveat in AGENT.md for the
+        # class of change that is not.
+        #
+        # Risk worth naming: this is a single-node cluster and the apiserver is
+        # a static pod. Malformed args here mean it does not come back, with no
+        # second control plane to fall back on. Recovery is reverting the
+        # machine config with talosctl, which works because the PKI is in SOPS,
+        # not in tfstate.
+        apiServer = {
+          extraArgs = {
+            oidc-issuer-url = "https://token.actions.githubusercontent.com"
+
+            # The audience CI must mint its token for. Not a secret, but it is
+            # a scoping control: a token GitHub issued for some other service
+            # will not authenticate here, which is what stops a leaked token
+            # from one integration being replayed against the cluster.
+            oidc-client-id = "homelab-k8s"
+
+            # Identity is the `sub` claim, which GitHub builds from IDs rather
+            # than names:
+            #   repo:<owner>@<owner-id>/<repo>@<repo-id>:<ref>
+            # Using it as the username means the caller's identity is bound to
+            # a specific repository and cannot survive that repo being renamed
+            # or its name being reused by someone else.
+            #
+            # The prefix keeps these in their own namespace: without it, a
+            # claim value could collide with a real Kubernetes user or a
+            # system: identity.
+            oidc-username-claim  = "sub"
+            oidc-username-prefix = "gha:"
+
+            # Groups come from `repository_owner`, so every repo under this
+            # account lands in one group (gha:lestherll) that RBAC binds once.
+            # Per-repo isolation deliberately does NOT come from RBAC — it
+            # comes from a ValidatingAdmissionPolicy reading the `sub` above,
+            # because RBAC cannot express "only the object matching your own
+            # repository name".
+            oidc-groups-claim  = "repository_owner"
+            oidc-groups-prefix = "gha:"
+          }
+        }
       }
     }),
 

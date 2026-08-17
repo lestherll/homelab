@@ -1,0 +1,53 @@
+# What an app repo's CI is allowed to do once GitHub's OIDC token has been
+# accepted by the apiserver.
+#
+# The binding is to a GROUP, not a user: every repo under this account presents
+# `repository_owner: lestherll`, which the apiserver prefixes into
+# `gha:lestherll`. That is the whole point — a new app repo needs no RBAC
+# object, no commit here, nothing. Onboarding app number twenty changes nothing.
+#
+# Per-repo isolation is deliberately NOT here. RBAC cannot express "only the
+# object whose name matches your own repository", because it has no way to
+# compare a request's identity against the object being acted on. That job
+# belongs to the ValidatingAdmissionPolicy alongside this file, which is
+# therefore the load-bearing security boundary — not this Role.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: app-registrar
+  namespace: flux-system
+rules:
+  # Scoped to the two Flux pointer kinds and nothing else. Notably absent:
+  # HelmRelease, and any ability to read Secrets — flux-system holds the SOPS
+  # age key and the git credentials, and CI has no business near either.
+  - apiGroups: ["source.toolkit.fluxcd.io"]
+    resources: ["gitrepositories"]
+    verbs: ["create", "get", "list", "patch", "update", "delete"]
+  - apiGroups: ["kustomize.toolkit.fluxcd.io"]
+    resources: ["kustomizations"]
+    verbs: ["create", "get", "list", "patch", "update", "delete"]
+---
+# A Role, not a ClusterRole: this grant exists only in flux-system. CI can
+# create a pointer object there and nowhere else.
+#
+# Worth being honest about what that does and does not contain. A Kustomization
+# is reconciled by Flux, which runs as cluster-admin, so anything CI can point
+# Flux at can end up anywhere in the cluster. The boundary this establishes is
+# between app repos — repo A cannot touch repo B's objects — not between an app
+# repo and the cluster. Any repo under this account is trusted with the
+# cluster; that is inherited from binding to repository_owner and is the
+# design's accepted position, not an oversight.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: app-registrar
+  namespace: flux-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: app-registrar
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    # oidc-groups-prefix "gha:" + the repository_owner claim.
+    name: gha:lestherll
