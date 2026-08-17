@@ -1,0 +1,64 @@
+# Alertmanager answered UNAUTHENTICATED to any pod in the cluster.
+#
+# Found by audit on 2026-08-17, not by anything failing: a throwaway pod in a
+# fresh namespace, with no credentials, got `HTTP 200` from
+# `/api/v2/status` on the ClusterIP. Alertmanager ships no authentication of any
+# kind, so the same path serves `POST /api/v2/silences` — meaning any workload
+# on the cluster could silence any alert, including the one telling you about
+# whatever it was doing. Nothing logs a silence's origin usefully.
+#
+# This is the same class of gap that `infrastructure/platform-api/`'s per-app
+# lockdown closed for `Application` instances. Alertmanager and Grafana were
+# missed by that work because they are exposed through the same `tailscale`
+# IngressClass but are NOT Application instances — the RGD cannot reach them,
+# and their exposure predates the platform API entirely.
+#
+# Scope: the whole `observability` namespace is allowed, deliberately, rather
+# than enumerating Prometheus. Prometheus sends alerts here (9093) and scrapes
+# both this and the config-reloader sidecar (8080); Grafana's alerting UI can
+# query it; and the set grows every time the stack's chart adds a component.
+# Enumerating that would break on a chart upgrade, and would break by
+# *dropping alerts*, which is the failure this component exists to prevent.
+# The gap being closed is cross-namespace access, and that is closed exactly.
+#
+# NOT included: an egress rule. Alertmanager must reach ntfy on the internet to
+# deliver anything (see alertmanager-ntfy-secret.sops.yaml), and an egress
+# default-deny here would silence every notification while leaving the UI
+# looking perfectly healthy.
+#
+# The kubelet's probes are permitted cluster-wide by
+# infrastructure/cilium/allow-node-to-pods.yaml, not here. Without that file
+# this policy crash-loops Alertmanager on probe timeouts — see
+# docs/networkpolicy-enforcement-notes.md.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: alertmanager
+  namespace: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: alertmanager
+  policyTypes:
+    - Ingress
+  ingress:
+    # Anything inside observability: Prometheus (alerts + both scrape targets),
+    # Grafana, and whatever the chart adds next. No port restriction — the
+    # membership is what is being scoped here, not the port.
+    - from:
+        - podSelector: {}
+    # The Alertmanager tailnet exposure's own proxy. Named exactly, the same way
+    # the Application RGD names an app's own proxy: `alertmanager` is this
+    # Ingress's name, so another exposure's proxy does not match.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tailscale
+          podSelector:
+            matchLabels:
+              tailscale.com/parent-resource: alertmanager
+              tailscale.com/parent-resource-ns: observability
+              tailscale.com/parent-resource-type: ingress
+      ports:
+        - protocol: TCP
+          port: 9093

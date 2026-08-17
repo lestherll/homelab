@@ -1,0 +1,49 @@
+# The companion to alertmanager-networkpolicy.yaml — same gap, milder case.
+#
+# Grafana was also reachable from any pod in the cluster, but unlike Alertmanager
+# it has real authentication: the audit's `HTTP 200` was its login page, not
+# access to anything. So this is defence in depth rather than a hole being
+# closed, and it is worth being clear about that distinction rather than filing
+# both under "insecure".
+#
+# It still earns its place. Grafana's admin credential lives in
+# grafana-admin-secret.sops.yaml and its datasources hold cluster-internal
+# endpoints; a login page reachable from every workload on the cluster is an
+# unnecessary place to be brute-forced, and the cost of closing it is one file
+# that will never need touching.
+#
+# Port 3000, not 80. The Service publishes 80 and targets the container's
+# `grafana` port, and a NetworkPolicy matches the POD port — writing 80 here
+# would produce a policy that looks right, admits cleanly, and drops every
+# request. Nothing reports the mismatch.
+#
+# See alertmanager-networkpolicy.yaml for why the whole observability namespace
+# is allowed rather than Prometheus alone, and for the kubelet-probe dependency
+# on infrastructure/cilium/allow-node-to-pods.yaml.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grafana
+  namespace: observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  policyTypes:
+    - Ingress
+  ingress:
+    # Prometheus scrapes Grafana's own metrics on 3000.
+    - from:
+        - podSelector: {}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tailscale
+          podSelector:
+            matchLabels:
+              tailscale.com/parent-resource: grafana
+              tailscale.com/parent-resource-ns: observability
+              tailscale.com/parent-resource-type: ingress
+      ports:
+        - protocol: TCP
+          port: 3000

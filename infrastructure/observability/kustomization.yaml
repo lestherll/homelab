@@ -7,5 +7,10 @@ resources:
   - helmrelease.yaml
   - grafana-ingress.yaml
   - alertmanager-ingress.yaml
+  # Paired with the two ingresses above: these exposures go through the same
+  # tailscale IngressClass as an Application but are not Application instances,
+  # so the per-app lockdown the platform API renders does not reach them.
+  - grafana-networkpolicy.yaml
+  - alertmanager-networkpolicy.yaml
   - dashboards
   - alerts
