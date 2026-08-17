@@ -1,0 +1,45 @@
+# Exposes the Kubernetes API server to the tailnet, so an app repo's CI can
+# register its own Flux pointer objects without anything on this side changing
+# per app.
+#
+# Why this and not a `loadBalancerClass: tailscale` Service on port 6443: the
+# operator ships a purpose-built apiserver proxy, and using it means the
+# apiserver's own certificate never has to name a tailnet hostname. Clients
+# terminate TLS against the proxy's Let's Encrypt cert for its MagicDNS FQDN,
+# and the proxy reaches the apiserver in-cluster — so no `certSANs` change, and
+# no `terraform apply` needed to make the exposure work at all.
+#
+# mode: noauth is load-bearing, not a default. In `auth` mode the proxy strips
+# the caller's credentials and impersonates their *tailnet* identity, which
+# would make per-repo isolation a matter of issuing one tailnet tag per app
+# repo — and tags live in tailscale-acl/policy.hujson, in THIS repo, so every
+# new app would need a commit here. That is exactly the manual step this whole
+# design exists to remove. In noauth the proxy forwards requests unmodified, so
+# CI's GitHub-signed OIDC token reaches the apiserver intact and isolation is
+# enforced by an admission policy reading the token's own claims — generic, and
+# identical for app number two and app number twenty.
+#
+# The trade, named: noauth does not forward client certificates, so this
+# exposure cannot serve human kubectl. Human access stays the direct route from
+# the host and is tracked separately (LES-104), which would add a SECOND
+# ProxyGroup in auth mode alongside this one rather than changing this one.
+apiVersion: tailscale.com/v1alpha1
+kind: ProxyGroup
+metadata:
+  name: kube-apiserver-ci
+spec:
+  type: kube-apiserver
+  # Defaults to 2. One node means a second replica buys no availability — it
+  # would only be a second device on the tailnet doing nothing.
+  replicas: 1
+  kubeAPIServer:
+    mode: noauth
+    # Defaults to the ProxyGroup name; set explicitly because this string is
+    # the server URL every app repo's CI will hard-code, and it must not drift
+    # silently if the object is ever renamed. Resolves as
+    # kube-apiserver-ci.<tailnet>.ts.net.
+    hostname: kube-apiserver-ci
+  # Not set: `tags`, which defaults to [tag:k8s] — already owned by
+  # tag:k8s-operator in policy.hujson, so the proxy device can tag itself with
+  # no policy change. Note the CRD warns tags cannot be changed after the
+  # device is created; changing this later means recreating the ProxyGroup.
