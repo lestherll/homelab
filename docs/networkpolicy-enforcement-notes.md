@@ -75,6 +75,41 @@ Chaining gives up L7 policy and IPsec transparent encryption. Plain Kubernetes
   ConfigMap, so this lands through Flux like any other component. That is most
   of why it was the affordable option.
 
+## The kubelet-probe trap
+
+**A default-deny ingress policy blocks the kubelet's own liveness and readiness
+probes, and the workload dies while the process inside it is perfectly healthy.**
+`infrastructure/cilium/allow-node-to-pods.yaml` is what stops that, and it is
+load-bearing for every policy anyone writes here.
+
+The intuition that gets this wrong — the one this repo held until it was
+disproved — is "probes come from the host netns, and Cilium allows the `host`
+identity by default." Chaining is what makes it false. Cilium learns the node's
+addresses from the Node object and from the devices it manages, and under
+chaining it manages neither Flannel's bridge nor its address. Probes arrive from
+`cni0` at `10.244.0.1` and are classified **`world`** — indistinguishable from
+traffic off the internet.
+
+It was found by doing it. Restarting Flux's four controllers under its own,
+previously inert, `allow-egress` policy put every one of them into a probe-driven
+crash loop while their logs showed normal reconciliation throughout:
+
+```
+10.244.0.1:50492 (world) <> flux-system/notification-controller:9440
+  Policy denied DROPPED (TCP Flags: SYN)
+```
+
+That is the signature. **A workload that crash-loops on probe timeouts shortly
+after a policy starts selecting it is this, not the workload** — and note the
+`kubectl describe` message names only the probe, so the policy is not mentioned
+anywhere in the obvious place to look. `hubble observe --type drop` is.
+
+The fix is one address (`10.244.0.1/32`, the node's gateway on the pod network),
+allowed cluster-wide to all endpoints. It is a `CiliumClusterwideNetworkPolicy`
+because a plain `NetworkPolicy` cannot express it: `ipBlock` only means anything
+next to a rule that already selects the pods, so it would have to be copied into
+every policy ever written here and remembered for every new namespace.
+
 ## The three `flux-system` policies
 
 Flux installs `allow-egress`, `allow-scraping` and `allow-webhooks` into its own
@@ -87,9 +122,10 @@ control, so they were audited rather than assumed:
 | `allow-scraping` | Ingress on TCP 8080 from any namespace — the controllers' metrics port, which is what `observability`'s Prometheus scrapes. |
 | `allow-webhooks` | All ingress to `notification-controller` from any namespace — inbound `Receiver` webhooks. |
 
-They are correct as written and were left alone. Kubelet probes are unaffected:
-they originate in the host netns, which Cilium treats as the `host` entity and
-allows by default unless the host firewall is enabled.
+They are correct as written and were left alone — but note they are also what
+found the kubelet-probe trap above, since restarting the controllers under them
+was the first time anything on this cluster was subject to a real default-deny.
+They only work because `allow-node-to-pods` exists.
 
 ## Verifying enforcement
 
