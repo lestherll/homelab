@@ -6,6 +6,13 @@ resources:
   # anything under here, so this has no dependency to wait on.
   - flux-notifications
   - sources
+  # Early, ahead of everything it protects: cilium chains onto Flannel to make
+  # NetworkPolicy actually enforce. Safe in this Kustomization rather than its
+  # own — a ConfigMap and a HelmRelease, no CRD for a cold apply's dry-run to
+  # trip over. Nothing here depends on it to come up, though: policy is
+  # additive, and a pod created before Cilium is running is unmanaged rather
+  # than blocked.
+  - cilium
   - metrics-server
   - tailscale-operator
   - observability

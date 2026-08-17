@@ -1,0 +1,165 @@
+# Cilium, installed ONLY to enforce NetworkPolicy.
+#
+# Before this existed, every NetworkPolicy on this cluster was inert — accepted
+# by the API server, listed by `kubectl get netpol`, enforcing nothing, with no
+# signal anywhere that it was a no-op. The cause is the CNI: Talos defaults to
+# Flannel, which implements pod networking and has no policy backend. Do not
+# read a NetworkPolicy manifest predating this component as evidence that
+# anything was ever enforced.
+#
+# This is CNI *chaining*, not a CNI replacement. Flannel keeps routing, IPAM and
+# masquerading; Cilium attaches eBPF programs to the veths Flannel creates and
+# does policy and observability only. Replacing Flannel outright was rejected:
+# the no-downtime procedure needs two node pools to drain across, and on a
+# single node it means `cluster.network.cni.name: none`, a NotReady node, and a
+# ten-minute window to land Cilium before the kubelet gives up — a real chance
+# of a rebuild, to enforce a handful of ingress rules.
+#
+# Because it chains, this needs NO Talos machine-config change and no reboot:
+# it lands via Flux like any other component.
+#
+# Chart version re-verified against https://helm.cilium.io/index.yaml as of
+# 2026-08-17: 1.20.0 (appVersion 1.20.0).
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: cilium
+  # kube-system, not a namespace of its own: Talos enforces PodSecurity
+  # `baseline` cluster-wide and exempts exactly one namespace, kube-system.
+  # The agent is privileged and hostNetwork, so anywhere else needs an explicit
+  # `pod-security.kubernetes.io/enforce: privileged` label — one more thing to
+  # get wrong on the component that, if it fails, takes pod networking with it.
+  namespace: kube-system
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: cilium
+      version: "1.20.0"
+      sourceRef:
+        kind: HelmRepository
+        name: cilium
+        namespace: flux-system
+  values:
+    # --- Chaining ------------------------------------------------------------
+    cni:
+      chainingMode: generic-veth
+      # Write infrastructure/cilium/cni-configuration.yaml's conflist rather
+      # than generating one. Both settings are needed; `customConf` alone with
+      # no `configMap` leaves the node with no CNI config at all.
+      customConf: true
+      configMap: cni-configuration
+      install: true
+      # The chart defaults this to `true`, which renames every non-Cilium
+      # conflist on the node to `*.cilium_bak` so nothing can be scheduled on
+      # another plugin while the agent is down. That guarantee is already had
+      # here for free — kubelet takes the lexically first conflist, which is
+      # always Cilium's `05-`, so with the agent down pod creation fails closed
+      # rather than falling back to plain Flannel.
+      #
+      # What `true` would additionally cost is the way back. There is no shell
+      # on a Talos node, so a bad Cilium plus a renamed Flannel config is a
+      # single-node cluster that cannot create the pod you would fix it with.
+      # Leaving Flannel's conflist in place makes recovery "delete one file".
+      exclusive: false
+    # Flannel already assigned the pod its address by the time cilium-cni runs,
+    # so Cilium's IPAM is only deciding what CIDR it believes the node owns.
+    # `kubernetes` reads node.spec.podCIDR — the same 10.244.0.0/24 Flannel
+    # uses. The chart default, `cluster-pool`, would instead have Cilium carve
+    # its own range out of 10.0.0.0/8 and give cilium_host an address from it,
+    # disagreeing with Flannel about the entire pod network.
+    ipam:
+      mode: kubernetes
+    routingMode: native
+    # Flannel masquerades. Two components doing it double-NATs egress.
+    enableIPv4Masquerade: false
+    enableIPv6Masquerade: false
+    # kube-proxy stays. Restated rather than left at the default because the
+    # Talos install guide everyone copies sets this to `true`, and doing that
+    # here would have Cilium take over Services while kube-proxy is still
+    # programming rules for them.
+    kubeProxyReplacement: false
+
+    # --- Talos constraints ---------------------------------------------------
+    # Talos forbids workloads mounting cgroups; the host already has cgroup v2
+    # mounted at the standard path, so point Cilium at it instead.
+    cgroup:
+      autoMount:
+        enabled: false
+      hostRoot: /sys/fs/cgroup
+    bpf:
+      # Talos forwards kube-dns to the host resolver, which eBPF host-routing
+      # bypasses. Without this, DNS from pods breaks in a way that looks like
+      # every workload failing at once.
+      hostLegacyRouting: true
+    securityContext:
+      capabilities:
+        # The chart defaults verbatim, minus SYS_MODULE: Talos does not let a
+        # workload load kernel modules, and the agent crash-loops asking for a
+        # capability it cannot be granted. Kept as an explicit list rather than
+        # a patch so a chart bump that adds a capability shows up in a diff.
+        ciliumAgent:
+          - CHOWN
+          - KILL
+          - NET_ADMIN
+          - NET_RAW
+          - IPC_LOCK
+          - SYS_ADMIN
+          - SYS_RESOURCE
+          - DAC_OVERRIDE
+          - FOWNER
+          - SETGID
+          - SETUID
+          - SYSLOG
+        cleanCiliumState:
+          - NET_ADMIN
+          - SYS_ADMIN
+          - SYS_RESOURCE
+    # KubePrism, Talos's node-local apiserver load balancer (verified listening
+    # on 127.0.0.1:7445). The agent reaches the apiserver without going through
+    # kube-proxy, so it can still come up if Service routing is what is broken.
+    k8sServiceHost: localhost
+    k8sServicePort: 7445
+
+    # --- Observability -------------------------------------------------------
+    # Hubble is here because of HOW this failed: a policy that enforces nothing
+    # looks exactly like a policy that allows everything. Exporting the
+    # policy-verdict and drop metrics means "was this connection allowed, and by
+    # what" is answerable from Prometheus instead of by experiment.
+    hubble:
+      enabled: true
+      metrics:
+        enabled:
+          - "policy:sourceContext=app|workload-name|pod;destinationContext=app|workload-name|pod;labelsContext=source_namespace,destination_namespace"
+          - "drop:sourceContext=app|workload-name|pod;destinationContext=app|workload-name|pod;labelsContext=source_namespace,destination_namespace"
+        serviceMonitor:
+          enabled: true
+          # kube-prometheus-stack's Prometheus selects ServiceMonitors on this
+          # label in any namespace; without it the monitor is created and
+          # silently never scraped.
+          labels:
+            release: kube-prometheus-stack
+      # relay and ui are off: on one node `kubectl exec -n kube-system ds/cilium
+      # -- hubble observe` reads the same flows directly, and the UI would want
+      # a `tailscale` Ingress — which costs a Let's Encrypt order every time it
+      # is recreated (see AGENT.md).
+      relay:
+        enabled: false
+      ui:
+        enabled: false
+
+    # --- Footprint -----------------------------------------------------------
+    # Stated rather than left implicit so the platform's cost stays visible in
+    # git and a chart bump cannot change it without showing up in a diff.
+    operator:
+      # The chart defaults to 2 for HA. Single node: the second replica sits
+      # Pending forever against podAntiAffinity.
+      replicas: 1
+      resources:
+        requests: { cpu: 25m, memory: 96Mi }
+        limits: { cpu: 500m, memory: 256Mi }
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      # Deliberately generous, and deliberately not lower. The agent owns the
+      # datapath — an OOMKill here is a networking outage, not a restarted pod.
+      limits: { cpu: 2000m, memory: 768Mi }
