@@ -55,22 +55,40 @@ keeps onboarding zero-touch. In **Settings → Trust credentials → New
 credential → OpenID Connect**:
 
 - **Issuer**: GitHub Actions
-- **Subject**: `repo:lestherll@37829703/*`
+- **Subject**: `repo:lestherll@37829703/*:ref:refs/heads/main`
 
   Same ID-based shape as the ACL credential in `tailscale-acl/README.md` — see
-  there for why the `@<id>` suffixes are not optional. The wildcard is what
-  makes this credential cover every current *and future* app repo. If Tailscale
-  rejects a wildcard in that position, fall back to one credential per app
-  repo with `repo:lestherll@37829703/<repo>@<repo-id>:*` — onboarding then
-  costs a console click per app, which is a real (if small) regression against
-  this document's goal and is worth recording here if it happens.
+  there for why the `@<id>` suffixes are not optional. Two halves matter
+  independently.
+
+  The `*` is what makes one credential cover every current *and future* app
+  repo, which is the whole reason onboarding stays zero-touch. Tailscale
+  matches subject patterns with `*` against any character in any position, not
+  just as a trailing wildcard. It is safe against a cleverly-named repo because
+  GitHub signs the `lestherll@37829703/` prefix; nothing a repo is called can
+  forge it.
+
+  The `:ref:refs/heads/main` tail restricts this to main-branch runs, so no
+  pull-request job in any of these repos can obtain a `tag:ci` node. Both
+  triggers of the registration workflow — push to `main` and
+  `workflow_dispatch` on `main` — mint exactly that ref, so nothing legitimate
+  is excluded. Note this does mean a `workflow_dispatch` teardown run from a
+  branch will fail at token exchange.
 - **Scopes**: `auth_keys` (write), and nothing else. This is the scope
   `tailscale/github-action` needs to mint the ephemeral node key; the
   credential must not be able to read devices or touch the policy file.
-- **Tags**: `tag:ci`. A credential with tags may only mint keys carrying those
-  tags, so this is a second, independent bound on what a compromised app-repo
-  workflow can become on the tailnet — it cannot join as `tag:k8s` and start
-  claiming services.
+  Resist adding `devices:core` — it grants read/write over every device on
+  the tailnet, which is a far worse trade than anything it buys back.
+- **Tags**: `tag:ci`, and the console **requires** this for a write scope
+  rather than merely offering it. Auth keys from this credential may only tag
+  devices with these exact tags or tags those manage, which is a second bound,
+  independent of the cluster's: a compromised app-repo workflow cannot join as
+  `tag:k8s` and start claiming the apiserver service.
+
+  If the tag dropdown comes up empty, the tag is missing from the *live*
+  policy rather than from the form — `policy.hujson` on an unmerged branch has
+  changed nothing, and a console tab opened before the last apply shows a
+  stale list. Reload before suspecting anything else.
 
 Copy the generated **Client ID** and **Audience** into each app repo's Actions
 secrets as `TS_OAUTH_CLIENT_ID` and `TS_AUDIENCE`, along with
