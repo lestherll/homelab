@@ -293,6 +293,118 @@ spec:
         requests: { cpu: 10m, memory: 32Mi }
         limits: { cpu: 50m, memory: 64Mi }
 
+      # Flux's own objects, as metrics.
+      #
+      # WHY THIS IS NEEDED AT ALL: Flux used to export gotk_suspend_status and
+      # gotk_reconcile_condition from its controllers. As of the v2.8.8 running
+      # here it does not — the controllers serve only reconcile *durations* and
+      # token-cache counters (verified by curling a controller's :8080/metrics,
+      # not inferred from release notes). Flux's object status now comes from
+      # kube-state-metrics reading the CRs directly, which is what this is.
+      #
+      # WHAT IT BUYS, and it is not a duplicate of the notification path in
+      # infrastructure/flux-notifications/: that path is EVENT-driven, so it
+      # reports things that *happen*. This reports what *is*. The two gaps it
+      # closes are exactly the ones events cannot see —
+      #   * a SUSPENDED object, where nothing is failing because nothing is
+      #     happening at all, and
+      #   * an object that has been stuck not-ready for a long time without
+      #     emitting fresh error events.
+      #
+      # Cardinality cost is 16 series on this cluster (one per Flux object),
+      # which is noise-level against the ~64k total and worth stating given how
+      # much effort went into cutting cardinality here.
+      customResourceState:
+        enabled: true
+        config:
+          kind: CustomResourceStateMetrics
+          spec:
+            resources:
+              # One metric name across all three kinds, distinguished by the
+              # customresource_kind label kube-state-metrics adds itself. A
+              # single series name means one alert expression covers every Flux
+              # kind, including any added later.
+              - groupVersionKind:
+                  group: kustomize.toolkit.fluxcd.io
+                  version: v1
+                  kind: Kustomization
+                metricNamePrefix: gotk
+                metrics:
+                  - name: "resource_info"
+                    help: "The current state of a Flux resource."
+                    each:
+                      type: Info
+                      info:
+                        labelsFromPath:
+                          name: [metadata, name]
+                    labelsFromPath:
+                      # exported_namespace, not namespace: kube-state-metrics
+                      # reserves `namespace` for its own scrape-target labels
+                      # and the two would collide.
+                      exported_namespace: [metadata, namespace]
+                      ready: [status, conditions, "[type=Ready]", status]
+                      # CAREFUL when writing PromQL against this: the label is
+                      # ABSENT when spec.suspend is unset, not "false"
+                      # (confirmed live). So `suspended="true"` is the only safe
+                      # way to match — `suspended!="true"` also matches every
+                      # series that simply lacks the label.
+                      suspended: [spec, suspend]
+                      revision: [status, lastAppliedRevision]
+              - groupVersionKind:
+                  group: helm.toolkit.fluxcd.io
+                  version: v2
+                  kind: HelmRelease
+                metricNamePrefix: gotk
+                metrics:
+                  - name: "resource_info"
+                    help: "The current state of a Flux resource."
+                    each:
+                      type: Info
+                      info:
+                        labelsFromPath:
+                          name: [metadata, name]
+                    labelsFromPath:
+                      exported_namespace: [metadata, namespace]
+                      ready: [status, conditions, "[type=Ready]", status]
+                      suspended: [spec, suspend]
+              - groupVersionKind:
+                  group: source.toolkit.fluxcd.io
+                  version: v1
+                  kind: GitRepository
+                metricNamePrefix: gotk
+                metrics:
+                  - name: "resource_info"
+                    help: "The current state of a Flux resource."
+                    each:
+                      type: Info
+                      info:
+                        labelsFromPath:
+                          name: [metadata, name]
+                    labelsFromPath:
+                      exported_namespace: [metadata, namespace]
+                      ready: [status, conditions, "[type=Ready]", status]
+                      suspended: [spec, suspend]
+
+      rbac:
+        # kube-state-metrics' own role covers built-in kinds only, so without
+        # these it starts cleanly and silently exports nothing for Flux.
+        extraRules:
+          - apiGroups:
+              - kustomize.toolkit.fluxcd.io
+              - helm.toolkit.fluxcd.io
+              - source.toolkit.fluxcd.io
+            resources: ["*"]
+            verbs: ["get", "list", "watch"]
+          # Not obvious, and found by running this config against a throwaway
+          # kube-state-metrics before touching the live one: custom-resource
+          # state resolves each groupVersionKind through the CRD API, so it
+          # needs to list CustomResourceDefinitions too. Without this it runs,
+          # reports healthy, and emits zero gotk series while logging an RBAC
+          # error nobody is watching for.
+          - apiGroups: ["apiextensions.k8s.io"]
+            resources: ["customresourcedefinitions"]
+            verbs: ["get", "list", "watch"]
+
     prometheus-node-exporter:
       # Both are the chart's defaults, set explicitly for documentation.
       #
