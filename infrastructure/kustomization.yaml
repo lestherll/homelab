@@ -16,5 +16,9 @@ resources:
   - postgres
   - kro
   - seaweedfs
+  # Safe here rather than in its own Kustomization, unlike seaweedfs-runtime and
+  # platform-api: RBAC and ValidatingAdmissionPolicy are built-in kinds, so
+  # there is no CRD for a cold apply's dry-run to trip over.
+  - app-registrar
   # platform-api is deliberately NOT here — its RGDs need kro's CRD, which this
   # same Kustomization installs. See clusters/homelab/infrastructure-platform-api.yaml.
