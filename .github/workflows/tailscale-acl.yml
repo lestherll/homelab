@@ -1,0 +1,82 @@
+# Applies tailscale-acl/policy.hujson to the live tailnet's control plane.
+#
+# This is the repo's first GitHub Actions workflow, and the only path in the
+# repo that changes something outside the cluster without going through Flux —
+# Tailscale's control plane is not a thing Flux can reconcile, so CI talks to
+# it directly. Operating manual: tailscale-acl/README.md.
+#
+# Auth is workload identity federation, not a stored OAuth secret: the job
+# mints a short-lived GitHub OIDC token per run and trades it for a Tailscale
+# API token. TS_OAUTH_CLIENT_ID and TS_AUDIENCE are *not* secrets (Tailscale's
+# docs say so explicitly, and both stay visible in the admin console) — they
+# live in Actions secrets only to keep the tailnet name and client id out of a
+# public file, not because leaking them grants anything.
+name: Tailscale ACL
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - tailscale-acl/policy.hujson
+      - .github/workflows/tailscale-acl.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - tailscale-acl/policy.hujson
+      - .github/workflows/tailscale-acl.yml
+
+# Never let two applies race the control plane; a queued run re-reads the file
+# from its own commit anyway, so cancelling in-progress would only lose work.
+concurrency:
+  group: tailscale-acl
+  cancel-in-progress: false
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for federated identity: without it the job cannot mint the
+      # OIDC token and the action fails with an auth error, not a policy error.
+      id-token: write
+    steps:
+      # Action SHAs are pinned, not tags: a tag is mutable and this job holds
+      # write access to the tailnet's policy. Comment records the version and
+      # when it was last re-verified, matching the repo's pinning convention.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, verified 2026-08-17
+      # gitops-pusher stores the last-applied ETag here to notice that someone
+      # edited the policy in the admin console since the last apply. Restoring
+      # it across runs is what makes that comparison possible at all; a cold
+      # cache is not an error, it just means the first run has nothing to
+      # compare against. See README for what happens on a console edit.
+      - name: Restore policy version cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0, verified 2026-08-17
+        with:
+          path: ./version-cache.json
+          key: version-cache.json-${{ github.run_id }}
+          restore-keys: |
+            version-cache.json-
+
+      # Two steps rather than one with a computed `action:` input so that the
+      # log shows plainly which mode ran. PRs validate against the live tailnet
+      # without touching it; only a merge to main writes.
+      - name: Validate policy (PR)
+        if: github.event_name == 'pull_request'
+        uses: tailscale/gitops-acl-action@5a4a17f5708e9bf96f4ee915a95e9f83c2eebe1a # v1.5.2, verified 2026-08-17
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          tailnet: ${{ secrets.TS_TAILNET }}
+          policy-file: tailscale-acl/policy.hujson
+          action: test
+
+      - name: Apply policy (main)
+        if: github.event_name == 'push'
+        uses: tailscale/gitops-acl-action@5a4a17f5708e9bf96f4ee915a95e9f83c2eebe1a # v1.5.2, verified 2026-08-17
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          tailnet: ${{ secrets.TS_TAILNET }}
+          policy-file: tailscale-acl/policy.hujson
+          action: apply
