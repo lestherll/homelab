@@ -56,14 +56,30 @@ In the Tailscale admin console, under **Settings → Trust credentials → New
 credential → OpenID Connect**:
 
 - **Issuer**: GitHub Actions
-- **Subject**: `repo:lestherll/homelab:*` — one credential covering both the
-  `push` to `main` (`repo:lestherll/homelab:ref:refs/heads/main`) and the
-  `pull_request` runs (`repo:lestherll/homelab:pull_request`). A pull request
-  from a fork cannot mint an id-token at all, so the wildcard does not hand
-  apply-capable credentials to an untrusted contributor; splitting it into two
-  credentials would buy nothing here.
+- **Subject**: `repo:lestherll@37829703/homelab@1318804989:*`
+
+  **Note the `@<id>` suffixes — this is the part that will waste an hour.**
+  GitHub mints *ID-based* subjects (`repo:<owner>@<owner-id>/<repo>@<repo-id>:…`),
+  not the `repo:<owner>/<repo>:…` form that every doc and example still shows,
+  including Tailscale's own. The IDs make the trust relationship rename-proof,
+  which is why they exist. Get them with
+  `gh api repos/lestherll/homelab --jq '{repo_id: .id, owner_id: .owner.id}'`,
+  or just read them off the console: on a mismatch Tailscale reports the exact
+  subject it received, which is the fastest way to the right value.
+
+  The trailing `*` makes one credential cover both events — `:pull_request`
+  for the validate runs and `:ref:refs/heads/main` for the apply. A pull
+  request from a fork cannot mint an id-token at all, so the wildcard does not
+  hand apply-capable credentials to an untrusted contributor; splitting this
+  into two credentials would buy nothing here.
+
+  A subject mismatch fails at **token exchange** with a bare
+  `403 Unauthorized`, before scopes or tailnet are ever consulted — so a 403
+  here means the claims didn't match, not that a permission is missing.
 - **Scopes**: `policy_file` (write). Nothing else — this credential must not be
-  able to touch devices, keys or DNS.
+  able to touch devices, keys or DNS. `policy_file:read` is enough to *validate*
+  and would be the tighter grant if the PR runs had their own credential, but
+  the single credential here also has to apply.
 
 Then copy the generated **Client ID** and **Audience** into this repo's Actions
 secrets, along with the tailnet name:
