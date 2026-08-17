@@ -73,12 +73,16 @@ credential → OpenID Connect**:
   claiming services.
 
 Copy the generated **Client ID** and **Audience** into each app repo's Actions
-secrets as `TS_OAUTH_CLIENT_ID` and `TS_AUDIENCE`. Neither is really secret
-(Tailscale's own docs say so); they are secrets here only to keep
-tailnet-identifying strings out of public repos.
+secrets as `TS_OAUTH_CLIENT_ID` and `TS_AUDIENCE`, along with
+`HOMELAB_APISERVER` (`kube-apiserver-ci.<tailnet>.ts.net`).
 
-Note these are the *only* two secrets an app repo needs for registration.
-There is no cluster token: link 3 mints one per run.
+None of the three is really secret — Tailscale's docs say as much about the
+first two, and the third is a hostname that only resolves for a device already
+on the tailnet. They are Actions secrets to keep tailnet-identifying strings
+out of the app repos, which are public.
+
+Note these are the *only* three, and that none of them is a cluster
+credential: link 3 mints one per run.
 
 ## What an app repo adds
 
@@ -125,7 +129,7 @@ jobs:
 
       - name: Register
         run: |
-          kubectl --server=https://kube-apiserver-ci.tailf4742d.ts.net \
+          kubectl --server="https://${{ secrets.HOMELAB_APISERVER }}" \
                   --token="$TOKEN" \
                   apply --server-side --force-conflicts -f - <<'YAML'
           apiVersion: source.toolkit.fluxcd.io/v1
