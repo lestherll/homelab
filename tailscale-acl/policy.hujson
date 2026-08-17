@@ -9,14 +9,50 @@
     // "tagOwners": {
     //      "tag:example": ["autogroup:admin"],
     // },
-    "tagOwners": {"tag:k8s-operator": [], "tag:k8s": ["tag:k8s-operator"]},
+    // tag:k8s-operator is the operator's own device; tag:k8s is every proxy it
+    // creates, which it is therefore allowed to own. tag:ci is worn by an app
+    // repo's GitHub Actions runner while it registers itself with the cluster —
+    // deliberately ONE tag shared by every app repo, not one tag per repo:
+    // per-repo isolation is enforced in the cluster by an admission policy
+    // reading the runner's GitHub-signed OIDC claims, so onboarding a new app
+    // needs no change to this file.
+    "tagOwners": {
+        "tag:k8s-operator": [],
+        "tag:k8s":          ["tag:k8s-operator"],
+        "tag:ci":           ["autogroup:admin"],
+    },
+
+    // Let the operator's proxies advertise the apiserver service without a
+    // human approving each one in the console. Scoped to the one service by
+    // name rather than "svc:*" — a wildcard here would let any tag:k8s proxy
+    // claim any service name it liked, including one a future rule trusts.
+    "autoApprovers": {
+        "services": {
+            "svc:kube-apiserver-ci": ["tag:k8s"],
+        },
+    },
 
     // Define grants that govern access for users, groups, autogroups, tags,
     // Tailscale IP addresses, and subnet ranges.
     "grants": [
         // Allow all connections.
         // Comment this section out if you want to define specific restrictions.
+        //
+        // NOTE: this blanket grant is still Tailscale's default and makes every
+        // narrower rule below it redundant — every device already reaches every
+        // other on every port. Narrowing it is its own piece of work (LES-64):
+        // done carelessly it locks the operator out of their own cluster, so it
+        // is not a change to make in passing.
         {"src": ["*"], "dst": ["*"], "ip": ["*"]},
+
+        // CI reaching the Kubernetes API server to register its own app.
+        // Redundant TODAY because of the blanket grant above — written now so
+        // that removing that grant tightens access without also breaking app
+        // onboarding, and so the intended reachability is reviewable in git
+        // rather than reconstructed later from what still happens to work.
+        // tcp:443 only: the proxy terminates TLS on the standard port and the
+        // apiserver's own 6443 is never exposed to the tailnet.
+        {"src": ["tag:ci"], "dst": ["svc:kube-apiserver-ci"], "ip": ["tcp:443"]},
 
         // Allow users in "group:example" to access "tag:example", but only from
         // devices that are running macOS and have enabled Tailscale client auto-updating.
