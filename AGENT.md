@@ -58,8 +58,14 @@ This repo is the declarative source of truth for a single-user homelab platform:
 
 ## Usage
 - Bootstrap/converge the host: `sudo ansible-playbook -i ansible/inventory/hosts.ini ansible/playbooks/converge.yml --tags <role>`.
-- Cluster access: `kubectl` via `~/.kube/config`. The kubeconfig is produced by Terraform from the Talos PKI — see `terraform/README.md` for the regeneration command; it is not written by any Ansible role.
+- Cluster access: `kubectl` via `~/.kube/config`. Neither Terraform nor Ansible writes it — Terraform's client configuration is deliberately ephemeral and never touches disk. Regenerate with `talosctl --nodes 10.10.0.10 kubeconfig --force ~/.kube/config`.
 - Node access: `talosctl` (no SSH, no shell on the node). A pod that needs to look at a volume directly is `terraform/debug-pod.yaml`.
+- **`talosctl` needs a talosconfig, and nothing generates one for you.** An empty `~/.talos/config` fails with `no context is set` / `failed to determine endpoints`, which is a bad thing to discover during an incident — this is the tool for a node with no shell and no SSH. Rebuild it from the SOPS-encrypted PKI:
+  ```
+  sops --decrypt terraform/clusters/homelab/talos-secrets.sops.yaml > /tmp/secrets.yaml
+  talosctl gen config homelab https://10.10.0.10:6443 --with-secrets /tmp/secrets.yaml -o <dir>
+  ```
+  That writes `talosconfig` alongside two machine configs you can discard; point `TALOSCONFIG` at it (and shred the plaintext secrets). This is why `talos-secrets.sops.yaml` exists as a second copy of the same PKI in talosctl's spelling — see the comment in `.sops.yaml`.
 - Editing an encrypted secret: `sops infrastructure/<path>/<name>.sops.yaml`.
 - Reading what a platform-API type renders: `scripts/platform-render eject Application/<name> -n <ns>` (or `preview -f <file>` before applying). Note kro renders in its controller, not in admission, so `kubectl apply --dry-run=server` on an instance shows the instance and nothing downstream — that is the gap this script fills.
 
