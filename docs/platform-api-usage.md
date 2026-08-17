@@ -125,7 +125,29 @@ same shape every ingress in this cluster already uses), plus:
 - a `PersistentVolumeClaim` named `<app>-data` — only when `persistence.size`
   is set,
 - a `PrometheusRule` named `<app>` — **always**,
-- a `PodMonitor` named `<app>` — only when `metrics.enabled: true`.
+- a `PodMonitor` named `<app>` — only when `metrics.enabled: true`,
+- a `NetworkPolicy` named `<app>` — **always**, restricting ingress to the app's
+  own Tailscale proxy plus `observability`. There is no field to turn it off.
+  See `Ingress lockdown` below.
+
+### Ingress lockdown, and the identity headers it buys
+
+Every `Application` is reachable only through its own Tailscale proxy. Nothing
+else in the cluster can reach its Service or its pods, and egress is untouched.
+
+That is not gratuitous hardening — it is the precondition for reading
+`Tailscale-User-Login`. Tailscale injects that header on every proxied request,
+but it is only worth believing if the backend cannot be reached any other way.
+The full app-side contract, including the three cases where the header is
+legitimately **absent** and must be treated as *unauthenticated* rather than as
+an error, is in `docs/identity-headers.md`. Read it before an app authorises on
+the header; display and audit uses need nothing.
+
+The one thing to know when writing an app: **an app that needs to be called by
+something other than its own proxy will break here**, as a connection timeout
+with nothing on either object naming the policy. That needs an additive
+`allowFrom` field on this API — file it rather than hand-writing a policy in the
+app's repo, where it would drift out of the platform's privilege documents.
 
 ### Choosing a persistence tier
 
@@ -378,6 +400,26 @@ Then from a debug pod (or locally against the tailnet, if reachable) with
 
 Both cases matter — only checking the success case would miss a
 fail-everywhere policy that happens to pass an existence check by accident.
+
+Prove the ingress lockdown the same way, and for the same reason — a
+`NetworkPolicy` that exists and a `NetworkPolicy` that enforces looked
+identical on this cluster for months:
+
+```
+kubectl create ns netpol-check
+kubectl -n netpol-check run c --image=curlimages/curl --command -- sleep 300
+kubectl -n netpol-check wait --for=condition=ready pod/c --timeout=90s
+SVC=$(kubectl get svc <app> -n <ns> -o jsonpath='{.spec.clusterIP}')
+
+# negative: MUST fail. Uses the IP, so a DNS hiccup can't be mistaken for a deny.
+kubectl -n netpol-check exec c -- curl -sS -m 8 -o /dev/null -w '%{http_code}\n' http://$SVC:80/
+
+# positive: MUST still return 200
+curl -s -o /dev/null -w '%{http_code}\n' https://<host>.tailf4742d.ts.net/<probePath>
+
+kubectl exec -n kube-system ds/cilium -- hubble observe --namespace netpol-check --type drop --last 20
+kubectl delete ns netpol-check
+```
 
 ## Known limits, worth knowing before you start
 

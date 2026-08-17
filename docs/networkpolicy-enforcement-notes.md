@@ -168,6 +168,19 @@ found the kubelet-probe trap above, since restarting the controllers under them
 was the first time anything on this cluster was subject to a real default-deny.
 They only work because `allow-node-to-pods` exists.
 
+## What actually uses this
+
+Enforcement was built for one consumer: the per-`Application` ingress lockdown in
+`infrastructure/platform-api/rgd-application.yaml` (revision 5), which restricts
+an app to its own Tailscale proxy and is what makes the `Tailscale-User-*`
+identity headers worth reading. That is the first policy on this cluster written
+to *do* something rather than to be inherited from an upstream chart — see
+`docs/identity-headers.md`.
+
+It is also the first thing to suspect if a workload's connectivity changes
+unexpectedly, since it is rendered automatically for every `Application` with no
+opt-in and nothing in the app's own manifests mentioning it.
+
 ## Verifying enforcement
 
 The test that found the problem is also the test that proves the fix, and the

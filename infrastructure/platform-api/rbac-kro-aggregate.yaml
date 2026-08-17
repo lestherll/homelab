@@ -14,6 +14,16 @@
 # Rule of thumb when extending: grant the API groups the RGDs *render*, plus
 # the platform.homelab group itself (kro reconciles its own generated instance
 # CRDs and writes their status).
+#
+# REMOVING a grant is the dangerous direction and needs two changes, not one.
+# kro lists ORPHANS of every kind it previously rendered on each reconcile, so a
+# revoked grant makes that list forbidden — and that fails the whole reconcile,
+# not just the cleanup. Every instance of the affected RGD parks at IN_PROGRESS
+# with the permission error in .status.conditions, and hand-deleting the leftover
+# objects does not help, because the forbidden call is the list itself. Drop the
+# resource from the RGD, let the instances reconcile clean, then remove the grant
+# in a later change. Learned by reverting an RGD revision, which reverts its
+# grant along with it.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -34,8 +44,15 @@ rules:
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # networkpolicies joins ingresses as of Application revision 5: every
+  # Application renders one, restricting ingress to its own Tailscale proxy.
+  # Note `delete` here is a real privilege — it is the verb that can take a
+  # rendered lockdown back off. That is unavoidable (kro must be able to remove
+  # what it created when an Application is deleted) and is the reason the policy
+  # is generated from this document rather than hand-written per app: a missing
+  # policy is visible as a diff here, not as an absence nobody notices.
   - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses"]
+    resources: ["ingresses", "networkpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Rendered by the Application RGD's spec.persistence (revision 3), which
   # replaced a hostPath bind-mount with a real claim. Only PVCs are granted,

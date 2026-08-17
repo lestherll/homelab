@@ -56,6 +56,13 @@
 #           app is left to clean up by hand. Verified live on fastapi-echo:
 #           PVC removed, volume and volumeMount gone from the Deployment, app
 #           unaffected. An instance that DOES set persistence.size is untouched.
+#   rev 5 — a NetworkPolicy per Application, making the Tailscale identity
+#           headers trustworthy. Purely additive to the schema (no new fields at
+#           all) but NOT a no-op on the cluster: every existing Application gains
+#           a real ingress restriction on the next reconcile. See the
+#           networkPolicy resource at the end of this file for the full
+#           reasoning, and docs/identity-headers.md for the app-side contract
+#           this is the precondition for.
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
@@ -617,6 +624,111 @@ spec:
                         name: ${schema.metadata.name}
                         port:
                           number: 80
+
+    # ---- Ingress lockdown (revision 5) --------------------------------------
+    #
+    # This is what makes the `Tailscale-User-Login` header worth reading.
+    #
+    # The Tailscale operator injects `Tailscale-User-Login` / `-User-Name` /
+    # `-User-Profile-Pic` into every request it proxies, with no configuration.
+    # Tailscale's own guidance is that those headers are trustworthy only if the
+    # backend cannot be reached except through the proxy — its stated form,
+    # "have the service listen on localhost", has no Kubernetes equivalent. On a
+    # flat pod network any pod in the cluster can hit this app's Service
+    # directly and set whatever it likes in that header. A NetworkPolicy is the
+    # substitute for the localhost bind, and it is a precondition rather than a
+    # hardening extra: without it the header is a claim, not an identity.
+    #
+    # ALWAYS RENDERED, not opt-in. LES-64 originally proposed a per-app opt-in
+    # label mirroring `platform.homelab/seaweedfs-access`, and that convention
+    # predates this API — an Application has exactly one Service and exactly one
+    # `tailscale` Ingress by construction, so the platform already knows the
+    # complete set of legitimate callers without asking. An opt-in security
+    # control also has to be adopted app-by-app in repos this one does not own
+    # (zero-touch registration, docs/zero-touch-app-registration.md), which is
+    # the same as saying it would protect whichever apps happened to remember.
+    #
+    # The cost of always-on, stated plainly: an Application whose pods need
+    # ingress from something other than its own proxy or Prometheus — another
+    # app calling it as an internal API, say — breaks, and breaks as a
+    # connection timeout with nothing on either object naming this policy. No
+    # app on this cluster does that today. The fix when one does is an additive
+    # `spec.allowFrom` block here, not a hand-written policy in the app's repo,
+    # which kro would leave alone but which would drift out of this document.
+    #
+    # SELECTOR PRECISION, and its dependency on LES-103. The `from` block below
+    # names THIS app's own proxy pod: the operator labels each one
+    # `tailscale.com/parent-resource=<ingress name>` +
+    # `parent-resource-ns=<app namespace>` + `parent-resource-type=ingress`, and
+    # an Application's Ingress is named after the instance, so the match is
+    # exact. Another app's proxy is not permitted, which matters because a proxy
+    # is precisely the thing whose header injection is believed.
+    #
+    # If the app exposures ever move to a shared ProxyGroup, those labels become
+    # `parent-resource=<proxygroup>` / `parent-resource-type=proxygroup` and
+    # this rule matches nothing — every Application would break at once. It is
+    # not a bypass but it does coarsen the achievable rule to "some Tailscale
+    # ingress proxy", since a pooled proxy serves every app. Whoever does that
+    # migration edits this block in the same change.
+    #
+    # Ingress only, no egress rules. Egress default-deny is a much larger
+    # commitment (every app needs DNS, its database, SeaweedFS, and whatever it
+    # calls outbound) and it is not what the header question turns on. Adding a
+    # `policyTypes` entry for egress here later would put every Application into
+    # egress default-deny simultaneously; see the DNS-shaped failure recorded in
+    # docs/networkpolicy-enforcement-notes.md before considering it.
+    #
+    # The kubelet's probes are NOT allowed here and do not need to be — they
+    # arrive from 10.244.0.1 classified as `world` under CNI chaining, and
+    # infrastructure/cilium/allow-node-to-pods.yaml permits that cluster-wide.
+    # Without that file this policy crash-loops every Application on the
+    # cluster, which is the single most important thing to know before editing
+    # either one.
+    - id: networkPolicy
+      template:
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: ${schema.metadata.name}
+          namespace: ${schema.metadata.namespace}
+        spec:
+          # Selects the app's pods only. A Database attachment's CNPG pods live
+          # in the same namespace and carry different labels, so they are not
+          # selected and their own connectivity is untouched.
+          podSelector:
+            matchLabels:
+              app: ${schema.metadata.name}
+          policyTypes:
+            - Ingress
+          ingress:
+            # 1 — this app's own Tailscale ingress proxy. The only path that
+            # can carry an identity header, and now the only path in at all.
+            - from:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: tailscale
+                  podSelector:
+                    matchLabels:
+                      tailscale.com/parent-resource: ${schema.metadata.name}
+                      tailscale.com/parent-resource-ns: ${schema.metadata.namespace}
+                      tailscale.com/parent-resource-type: ingress
+              ports:
+                - protocol: TCP
+                  port: ${schema.spec.port}
+            # 2 — Prometheus. Unconditional, NOT gated on spec.metrics.enabled:
+            # gating would make enabling metrics a two-step change where the
+            # PodMonitor lands and then scrapes nothing but connection timeouts,
+            # and the failure would read as an app fault. `observability` is a
+            # platform namespace whose contents this repo controls, and reaching
+            # a /metrics endpoint is not a route through which an identity
+            # header can be forged — the app is behind the proxy either way.
+            - from:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: observability
+              ports:
+                - protocol: TCP
+                  port: ${schema.spec.port}
 
     # ---- Telemetry (revision 4) ---------------------------------------------
     #
