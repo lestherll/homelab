@@ -3,8 +3,6 @@ kind: Kustomization
 resources:
   - helmrepository-tailscale.yaml
   - helmrepository-prometheus-community.yaml
-  - gitrepository-fastapi-echo.yaml
-  - gitrepository-personal-finance-dashboard.yaml
   - helmrepository-cloudnative-pg.yaml
   - helmrepository-kro.yaml
   - helmrepository-seaweedfs-operator.yaml
