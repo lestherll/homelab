@@ -15,6 +15,32 @@ a part of the other three. In particular it is *not* under
 *inside* the cluster, reconciled by Flux, and confusing the two means editing
 the wrong file.
 
+## What the tailnet permits
+
+Tailscale's default blanket grant (`{"src":["*"],"dst":["*"],"ip":["*"]}`) is
+gone. Three rules replace it:
+
+| Source | Destination | Ports |
+| --- | --- | --- |
+| the operator's own devices | each other (`autogroup:self`) | everything |
+| the operator's own devices | `tag:k8s` — every proxy the operator creates | `tcp:80`, `tcp:443` |
+| `tag:ci` | `svc:kube-apiserver-ci` | `tcp:443` |
+
+Two consequences worth knowing before debugging a connection that hangs:
+
+- **A grant on `tag:k8s` is not a grant on `svc:kube-apiserver-ci`.** Device
+  grants and service grants are separate, which is why CI reaching the apiserver
+  needs its own rule and gets no access to any app from it.
+- **Tailscale SSH needs a grant, not just the `ssh` block.** The `ssh` block
+  decides who may open a session and as which local user; `tcp:22` reachability
+  comes from the first rule above. Delete that rule and SSH to the host stops
+  working, with nothing in the `ssh` block hinting why.
+
+Not granted, deliberately: users reaching `svc:kube-apiserver-ci` (that is human
+cluster access, and it needs an auth model settled first), anything reaching
+`tag:k8s-operator`, and any outbound rule for the proxies — they receive
+connections and originate none over the tailnet.
+
 ## Changing the policy
 
 1. Branch, edit `policy.hujson`, open a PR.
@@ -29,6 +55,12 @@ platform gets review discipline, not a webhook.
 Write `tests` blocks for rules that matter. They are the only thing standing
 between a typo'd `dst` and a silently wider tailnet, and they run on every PR
 for free.
+
+**Pair every accept with a deny.** This file's failure mode is silent: a rule
+that is too *wide* breaks nothing and stays invisible until someone re-reads the
+policy. An accept-only suite passes exactly as happily against a blanket
+allow-everything grant as against a tight one, so the denies are the half that
+actually tests anything.
 
 ## Drift: console edits are overwritten, not merged
 

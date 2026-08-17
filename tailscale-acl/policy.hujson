@@ -34,24 +34,66 @@
 
     // Define grants that govern access for users, groups, autogroups, tags,
     // Tailscale IP addresses, and subnet ranges.
+    //
+    // Tailscale's default blanket grant — {"src":["*"],"dst":["*"],"ip":["*"]} —
+    // was removed here. Everything reachable on this tailnet is now reachable
+    // because a rule below says so, which is the point: the previous state made
+    // every narrower rule in this file decorative, in exactly the way the
+    // cluster's NetworkPolicies were decorative before a policy-capable CNI
+    // landed. See the `tests` block at the bottom — the deny cases are what stop
+    // this file drifting back to "allows everything" without anyone noticing.
+    //
+    // What is deliberately NOT granted, so their absence reads as a decision:
+    //   - Users reaching svc:kube-apiserver-ci. That is human cluster access
+    //     (LES-104), which needs an impersonation-based auth model settled
+    //     before a reachability rule would mean anything. kubectl from the host
+    //     goes over the libvirt network (10.10.0.10), not the tailnet, so
+    //     nothing depends on this today.
+    //   - Anything reaching tag:k8s-operator. The operator drives its proxies
+    //     through the Kubernetes API from inside the cluster; its tailnet device
+    //     exists to be a device, and nothing needs to connect to it.
+    //   - Any egress rule for tag:k8s. The proxies receive connections and
+    //     originate none over the tailnet. If a proxy ever needs to reach
+    //     something, this is the first place to look — the symptom will be a
+    //     hang, not an error.
     "grants": [
-        // Allow all connections.
-        // Comment this section out if you want to define specific restrictions.
+        // The operator's own devices, to each other, on everything.
+        // autogroup:self is scoped to devices owned by the *same user* as the
+        // source, so this covers homelab / lesthers-mba / iphone-17 and cannot
+        // reach a tagged device — tagged devices have no user owner and are
+        // never in autogroup:self.
         //
-        // NOTE: this blanket grant is still Tailscale's default and makes every
-        // narrower rule below it redundant — every device already reaches every
-        // other on every port. Narrowing it is its own piece of work (LES-64):
-        // done carelessly it locks the operator out of their own cluster, so it
-        // is not a change to make in passing.
-        {"src": ["*"], "dst": ["*"], "ip": ["*"]},
+        // This is also what makes Tailscale SSH work. The "ssh" block below
+        // decides who may open a session and as which local user; it does not
+        // grant the network reachability to get there, and tcp:22 has to come
+        // from a grant like this one. Removing this breaks SSH to the host in a
+        // way the ssh block gives no hint about.
+        {"src": ["autogroup:member"], "dst": ["autogroup:self"], "ip": ["*"]},
+
+        // The operator reaching the app exposures.
+        //
+        // tag:k8s is every proxy the operator creates, which today means the
+        // four app/observability Ingress proxies and the apiserver ProxyGroup.
+        // There is no finer tag available: the operator applies tag:k8s to all
+        // of them, and splitting it would mean per-proxy tag configuration for
+        // no gain, since a proxy only ever serves the one workload behind it.
+        //
+        // Ports are the real scoping here. 443 is what the Ingresses serve; 80
+        // is kept because Tailscale Serve answers there with a redirect to 443,
+        // and dropping it turns "typed http:// out of habit" into a hang rather
+        // than a redirect. Every other port on those devices is denied — an app
+        // listening on 8000 in the cluster is not reachable on 8000 here.
+        {"src": ["autogroup:member"], "dst": ["tag:k8s"], "ip": ["tcp:80", "tcp:443"]},
 
         // CI reaching the Kubernetes API server to register its own app.
-        // Redundant TODAY because of the blanket grant above — written now so
-        // that removing that grant tightens access without also breaking app
-        // onboarding, and so the intended reachability is reviewable in git
-        // rather than reconstructed later from what still happens to work.
+        // Written before this tightening and previously redundant behind the
+        // blanket grant; now it is the only thing making app onboarding work.
         // tcp:443 only: the proxy terminates TLS on the standard port and the
         // apiserver's own 6443 is never exposed to the tailnet.
+        //
+        // Note the dst is the SERVICE, not tag:k8s. A service grant is separate
+        // from a device grant, so the rule above does not imply this one and
+        // this one gives CI no access to any app.
         {"src": ["tag:ci"], "dst": ["svc:kube-apiserver-ci"], "ip": ["tcp:443"]},
 
         // Allow users in "group:example" to access "tag:example", but only from
@@ -96,11 +138,66 @@
     ],
 
     // Test access rules every time they're saved.
-    // "tests": [
-    //      {
-    //          "src": "alice@example.com",
-    //          "accept": ["tag:example"],
-    //          "deny": ["100.101.102.103:443"],
-    //      },
-    // ],
+    //
+    // These run on every PR (the workflow's `test` mode) without touching the
+    // tailnet, and again on apply. They exist because the failure mode this file
+    // has is silent: a rule that is too WIDE breaks nothing and is invisible
+    // until someone re-reads the file. So every test below pairs an accept with
+    // a deny, and the denies are the half that matters — an accept-only suite
+    // passes just as happily against the blanket grant this change removed.
+    //
+    // Device names are MagicDNS short names, which is what the policy resolves
+    // against; they are stable for the operator's own devices and for the
+    // operator-managed proxies, both of which are named after the workload
+    // rather than randomly.
+    "tests": [
+        // The operator's own devices, including the SSH path to the host that
+        // the "ssh" block below depends on and does not itself grant.
+        //
+        // The deny is the load-bearing half: tag:k8s-operator is the operator's
+        // own tailnet device, granted to nobody, and it is the closest thing on
+        // this tailnet to a control-plane device. If it ever becomes reachable,
+        // a rule has been widened to tags in general rather than to tag:k8s.
+        {
+            "src":    "lestherll@github",
+            "accept": ["homelab:22", "lesthers-mba:22", "iphone-17:22"],
+            "deny":   ["tailscale-operator:443", "tailscale-operator:22"],
+        },
+
+        // The app exposures: reachable on what Tailscale actually serves, and
+        // on nothing else. 8000 and 3000 are the ports these workloads listen
+        // on *inside the cluster* — if either ever starts passing here, a rule
+        // has been widened to the whole device rather than to its served ports.
+        {
+            "src":    "lestherll@github",
+            "accept": [
+                "fastapi-echo:443",
+                "personal-finance-dashboard:443",
+                "grafana:443",
+                "alertmanager:443",
+                "fastapi-echo:80",
+            ],
+            "deny": [
+                "fastapi-echo:22",
+                "fastapi-echo:8000",
+                "grafana:3000",
+                "alertmanager:9093",
+            ],
+        },
+
+        // CI must reach nothing but the apiserver service. All three denies are
+        // real regressions worth catching: an app repo's runner reaching another
+        // app's exposure, or reaching the host over SSH.
+        //
+        // Deliberately deny-only. The matching accept would be the grant on
+        // svc:kube-apiserver-ci, and a VIP service is not a destination this
+        // tests block can name — the device kube-apiserver-ci-0 is a different
+        // destination that tag:ci is correctly NOT granted, so asserting it
+        // would encode the wrong expectation. That rule's real test is app
+        // registration continuing to work; see docs/zero-touch-app-registration.md.
+        {
+            "src":  "tag:ci",
+            "deny": ["fastapi-echo:443", "grafana:443", "homelab:22"],
+        },
+    ],
 }
