@@ -110,6 +110,47 @@ because a plain `NetworkPolicy` cannot express it: `ipBlock` only means anything
 next to a rule that already selects the pods, so it would have to be copied into
 every policy ever written here and remembered for every new namespace.
 
+### A broad allow is a cluster-wide deny unless you say otherwise
+
+The `enableDefaultDeny: {ingress: false, egress: false}` block in that file is
+load-bearing, and leaving it out is the single most destructive mistake
+available here. **Cilium switches on default-deny for any direction a policy
+writes rules in**, and `endpointSelector: {}` selects every endpoint in the
+cluster — so a policy written purely to *allow* one address instead denied all
+ingress everywhere, with the node as the only permitted source. It was written
+that way first, and that is what happened.
+
+It did not look like a policy problem. It looked like DNS: every Flux controller
+failing with `lookup source-controller.flux-system.svc... on 10.96.0.10:53: i/o
+timeout`, because CoreDNS had been swept into default-deny too and was dropping
+their queries. Nothing in that error names a NetworkPolicy.
+
+Two habits follow. Pair any broad `endpointSelector` with an explicit
+`enableDefaultDeny: false`, and when connectivity breaks cluster-wide shortly
+after a policy change, check `kubectl get ccnp,cnp -A` before believing the
+symptom.
+
+## Editing policy on the live cluster
+
+**Hand-apply and a background reconcile will fight, and the reconcile wins
+silently.** The `enableDefaultDeny` fix above was applied by hand to recover the
+cluster, reverted by Flux minutes later, and the identical failure then
+reappeared looking like a fresh and unrelated one. Recovering a live cluster is
+exactly when this is easiest to forget, because the change feels urgent rather
+than experimental.
+
+Worse, policy has a bootstrap loop the rest of the repo does not: Flux needs DNS
+to fetch the fix, and the broken policy is what breaks DNS, so a plain
+`flux resume` re-applies the last-known-bad revision and re-breaks the thing it
+needs to recover. Breaking the loop takes a specific order:
+
+```bash
+flux suspend kustomization infrastructure
+kubectl apply -f infrastructure/cilium/allow-node-to-pods.yaml   # restore DNS
+flux reconcile source git flux-system                            # fetch the fix while DNS works
+flux resume kustomization infrastructure                         # now applies the good revision
+```
+
 ## The three `flux-system` policies
 
 Flux installs `allow-egress`, `allow-scraping` and `allow-webhooks` into its own
