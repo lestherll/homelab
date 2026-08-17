@@ -1,0 +1,73 @@
+# The two Flux failures that events cannot see.
+#
+# infrastructure/flux-notifications/ already reports reconciliation errors as
+# they happen, and for a normal failure that is the better signal — it carries
+# the actual error string. These rules exist for the two states where nothing
+# *happens*, so no event is ever emitted:
+#
+#   * suspended — nothing is failing because nothing is being attempted, and
+#     `ready` stays True the whole time (confirmed live). A suspended
+#     Kustomization looks perfectly healthy in every view.
+#   * stuck not-ready — the first failure fired an event hours ago and there is
+#     nothing new to say, so the notification path has gone quiet while the
+#     cluster stays broken. This is exactly how personal-finance-dashboard sat
+#     failing from the Talos cutover until someone happened to look.
+#
+# Both are `critical` deliberately. Alertmanager routes critical only (see
+# infrastructure/observability/helmrelease.yaml), so warning would mean writing
+# an alert that delivers nowhere — and both of these mean the cluster has
+# stopped matching git, which is the one promise GitOps makes.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: flux
+  namespace: observability
+  labels:
+    # REQUIRED. ruleSelector is {release: kube-prometheus-stack}; without this
+    # the rule is created successfully and never evaluated.
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: flux
+      rules:
+        - alert: FluxResourceSuspended
+          # `suspended="true"` and not `suspended!="false"`: the label is absent
+          # entirely when spec.suspend is unset, so a negated matcher would
+          # match every healthy object on the cluster.
+          expr: gotk_resource_info{suspended="true"} == 1
+          # Two hours, chosen against the actual workflow rather than picked as
+          # a round number. Suspending a Kustomization to hand-test an unmerged
+          # fix is a normal, deliberate act that lasts minutes; this must never
+          # fire during that or it will be muted within a week. What it is for
+          # is the suspension somebody forgot to undo, which is only detectable
+          # by how long it has lasted.
+          for: 2h
+          labels:
+            severity: critical
+          annotations:
+            summary: >-
+              {{ $labels.customresource_kind }} {{ $labels.exported_namespace }}/{{ $labels.name }}
+              has been suspended for over 2 hours
+            description: >-
+              Flux is not reconciling it, so the cluster is silently diverging from git
+              and nothing else will report this — a suspended resource keeps reporting
+              Ready. If the hand-testing it was suspended for is finished, resume it:
+              `flux resume {{ $labels.customresource_kind | toLower }} -n {{ $labels.exported_namespace }} {{ $labels.name }}`.
+
+        - alert: FluxResourceNotReady
+          expr: gotk_resource_info{ready="False"} == 1
+          # 30m absorbs a slow HelmRelease upgrade or an image pull on this
+          # node's spinning disk without firing, while still catching a genuine
+          # stuck state the same morning rather than the same week.
+          for: 30m
+          labels:
+            severity: critical
+          annotations:
+            summary: >-
+              {{ $labels.customresource_kind }} {{ $labels.exported_namespace }}/{{ $labels.name }}
+              has not reconciled for 30 minutes
+            description: >-
+              It has been failing long enough that the notification path has gone
+              quiet — Flux only emits an event when something changes. Get the real
+              error with `flux get {{ $labels.customresource_kind | toLower }} -n {{ $labels.exported_namespace }}`
+              or `kubectl describe {{ $labels.customresource_kind | toLower }} -n {{ $labels.exported_namespace }} {{ $labels.name }}`.

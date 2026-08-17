@@ -1,6 +1,11 @@
-# Empty placeholder — the chart ships default alerts covering node and cluster
-# health already (plan §7). Populate this once a real application, build
-# pipeline, or data service exists and needs its own PrometheusRule.
+# Was an empty placeholder ("populate this once a real application, build
+# pipeline, or data service exists"). flux.yaml is the first entry, and it is
+# deliberately about the delivery mechanism rather than about a workload: the
+# per-application alerts this file anticipated are not here, because the
+# Application RGD renders them per instance instead (see
+# infrastructure/platform-api/rgd-application.yaml). Rules land here only when
+# they are about the platform itself and belong to no single instance.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-resources: []
+resources:
+  - flux.yaml
