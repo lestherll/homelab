@@ -20,9 +20,15 @@
 # identical for app number two and app number twenty.
 #
 # The trade, named: noauth does not forward client certificates, so this
-# exposure cannot serve human kubectl. Human access stays the direct route from
-# the host and is tracked separately (LES-104), which would add a SECOND
-# ProxyGroup in auth mode alongside this one rather than changing this one.
+# exposure cannot serve a client-cert kubectl. Human tailnet access (LES-104)
+# does NOT add a second ProxyGroup for that reason — a noauth proxy forwards
+# every request unmodified regardless of caller, so a human's Google-OIDC
+# token reaches the apiserver intact through this same proxy exactly like CI's
+# GitHub token does, and the apiserver's multi-issuer AuthenticationConfiguration
+# (terraform/modules/talos-cluster/talos.tf) does the actual identity check.
+# The earlier plan here (a second ProxyGroup in auth mode, impersonating the
+# caller's tailnet identity) was superseded by that decision, not kept as a
+# fallback.
 apiVersion: tailscale.com/v1alpha1
 kind: ProxyGroup
 metadata:

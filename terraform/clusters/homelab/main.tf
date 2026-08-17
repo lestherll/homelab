@@ -34,6 +34,18 @@ variable "machine_secrets" {
   sensitive   = true
 }
 
+variable "google_operator_email" {
+  description = <<-EOT
+    Google account allowed to authenticate to the cluster via OIDC. Not a
+    credential — an allow-list entry checked by claimValidationRules, RBAC
+    still gates everything it can do. Kept out of git because it's PII, not
+    because it's secret. Supplied via TF_VAR_google_operator_email, same
+    pattern as machine_secrets.
+  EOT
+  type        = string
+  sensitive   = true
+}
+
 module "cluster" {
   source = "../../modules/talos-cluster"
 
@@ -70,8 +82,9 @@ module "cluster" {
   node_gateway = "10.10.0.1"
   node_mac     = "52:54:00:7a:10:5e"
 
-  machine_secrets = var.machine_secrets
-  base_image_path = "/var/lib/libvirt/images/talos-v1.13.8-nocloud-amd64.raw"
+  machine_secrets       = var.machine_secrets
+  google_operator_email = var.google_operator_email
+  base_image_path       = "/var/lib/libvirt/images/talos-v1.13.8-nocloud-amd64.raw"
 }
 
 output "cluster_endpoint" {

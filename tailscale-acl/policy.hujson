@@ -62,11 +62,6 @@
     // this file drifting back to "allows everything" without anyone noticing.
     //
     // What is deliberately NOT granted, so their absence reads as a decision:
-    //   - Users reaching svc:kube-apiserver-ci. That is human cluster access
-    //     (LES-104), which needs an impersonation-based auth model settled
-    //     before a reachability rule would mean anything. kubectl from the host
-    //     goes over the libvirt network (10.10.0.10), not the tailnet, so
-    //     nothing depends on this today.
     //   - Anything reaching tag:k8s-operator. The operator drives its proxies
     //     through the Kubernetes API from inside the cluster; its tailnet device
     //     exists to be a device, and nothing needs to connect to it.
@@ -113,6 +108,16 @@
         // from a device grant, so the rule above does not imply this one and
         // this one gives CI no access to any app.
         {"src": ["tag:ci"], "dst": ["svc:kube-apiserver-ci"], "ip": ["tcp:443"]},
+
+        // The operator reaching the apiserver over the tailnet (LES-104).
+        // Same service as the CI rule above, same noauth proxy — the proxy
+        // forwards every request unmodified regardless of caller, so nothing
+        // about this rule needs to differ between a human's Google-OIDC token
+        // and CI's GitHub token. What used to block this (human access needing
+        // its own auth model) is resolved: the apiserver's multi-issuer
+        // AuthenticationConfiguration does the identity check, and RBAC
+        // (infrastructure/human-auth/) does the authorization.
+        {"src": ["autogroup:member"], "dst": ["svc:kube-apiserver-ci"], "ip": ["tcp:443"]},
 
         // Allow users in "group:example" to access "tag:example", but only from
         // devices that are running macOS and have enabled Tailscale client auto-updating.

@@ -29,5 +29,8 @@ resources:
   # platform-api: RBAC and ValidatingAdmissionPolicy are built-in kinds, so
   # there is no CRD for a cold apply's dry-run to trip over.
   - app-registrar
+  # RBAC for the operator's own Google-OIDC identity (LES-104). Built-in
+  # kinds only, same reasoning as app-registrar above.
+  - human-auth
   # platform-api is deliberately NOT here — its RGDs need kro's CRD, which this
   # same Kustomization installs. See clusters/homelab/infrastructure-platform-api.yaml.

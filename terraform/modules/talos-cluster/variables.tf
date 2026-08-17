@@ -161,6 +161,19 @@ variable "machine_secrets" {
   sensitive   = true
 }
 
+variable "google_operator_email" {
+  description = <<-EOT
+    Google account allowed to authenticate to the cluster via OIDC, checked by
+    an AuthenticationConfiguration claimValidationRules expression. Not a
+    credential — RBAC still gates everything a matched identity can do. Kept
+    out of state the same way machine_secrets is not: this is PII rather than
+    a secret, but it is the value most likely to need rotating later, so it is
+    templated into the rendered config rather than committed.
+  EOT
+  type        = string
+  sensitive   = true
+}
+
 variable "base_image_path" {
   description = <<-EOT
     Absolute path to the decompressed Talos disk image on the host, staged by
