@@ -62,6 +62,15 @@ policy. An accept-only suite passes exactly as happily against a blanket
 allow-everything grant as against a tight one, so the denies are the half that
 actually tests anything.
 
+**A test destination cannot be a MagicDNS name.** It resolves against tags,
+autogroups, entries in the `hosts` block and literal IPs — nothing else. Writing
+`fastapi-echo:443` fails validation with `unknown user or host`, which is a
+confusing error for what is really "that name means nothing here". Prefer a tag:
+it survives a proxy being recreated, and it tests the rule rather than one
+instance of it. `hosts` is for the rare destination that has no tag, and the
+block deliberately lists only the long-lived host — pinning a proxy's address
+there would produce a test that breaks on an unrelated redeploy.
+
 ## Drift: console edits are overwritten, not merged
 
 The admin console still lets you edit the policy directly, and nothing stops

@@ -22,6 +22,24 @@
         "tag:ci":           ["autogroup:admin"],
     },
 
+    // Named IPs, referenced only by the `tests` block at the bottom.
+    //
+    // This exists because a test destination cannot be a MagicDNS name: the
+    // policy resolves test hosts against tags, autogroups, entries here, and
+    // literal IPs, and nothing else. Writing "homelab:22" without this section
+    // fails validation with `unknown user or host` — which is how the tests
+    // caught their own first draft.
+    //
+    // Only the host is listed, and deliberately no proxies. A proxy's tailnet IP
+    // changes whenever the operator recreates it, so pinning one here would give
+    // a test that breaks on an unrelated redeploy; the proxies are tested
+    // through `tag:k8s` instead, which is stable by construction. The host's
+    // address is stable because the machine is long-lived — and if it ever does
+    // change, this fails loudly rather than silently testing nothing.
+    "hosts": {
+        "homelab": "100.121.11.84",
+    },
+
     // Let the operator's proxies advertise the apiserver service without a
     // human approving each one in the console. Scoped to the one service by
     // name rather than "svc:*" — a wildcard here would let any tag:k8s proxy
@@ -146,58 +164,56 @@
     // a deny, and the denies are the half that matters — an accept-only suite
     // passes just as happily against the blanket grant this change removed.
     //
-    // Device names are MagicDNS short names, which is what the policy resolves
-    // against; they are stable for the operator's own devices and for the
-    // operator-managed proxies, both of which are named after the workload
-    // rather than randomly.
+    // Destinations are TAGS, plus the one named host above. A MagicDNS device
+    // name is NOT resolvable here — the first draft of this block used
+    // "fastapi-echo:443" and friends and failed validation outright with
+    // `unknown user or host`. Tags are the better target anyway: they survive a
+    // proxy being recreated under a new name or address, and they express the
+    // rule being tested ("proxies are reachable on 443") rather than one
+    // instance of it.
     "tests": [
-        // The operator's own devices, including the SSH path to the host that
-        // the "ssh" block below depends on and does not itself grant.
+        // The proxies: reachable on what Tailscale actually serves, and on
+        // nothing else.
         //
-        // The deny is the load-bearing half: tag:k8s-operator is the operator's
-        // own tailnet device, granted to nobody, and it is the closest thing on
-        // this tailnet to a control-plane device. If it ever becomes reachable,
-        // a rule has been widened to tags in general rather than to tag:k8s.
+        // The denies are the load-bearing half. 8000 / 3000 / 9093 are the ports
+        // fastapi-echo, Grafana and Alertmanager listen on *inside the cluster*;
+        // if any of them starts passing, a rule has been widened from the served
+        // ports to the whole device. tag:k8s-operator is granted to nobody and
+        // is the closest thing here to a control-plane device — if it becomes
+        // reachable, a rule has been widened to tags in general.
         {
             "src":    "lestherll@github",
-            "accept": ["homelab:22", "lesthers-mba:22", "iphone-17:22"],
-            "deny":   ["tailscale-operator:443", "tailscale-operator:22"],
-        },
-
-        // The app exposures: reachable on what Tailscale actually serves, and
-        // on nothing else. 8000 and 3000 are the ports these workloads listen
-        // on *inside the cluster* — if either ever starts passing here, a rule
-        // has been widened to the whole device rather than to its served ports.
-        {
-            "src":    "lestherll@github",
-            "accept": [
-                "fastapi-echo:443",
-                "personal-finance-dashboard:443",
-                "grafana:443",
-                "alertmanager:443",
-                "fastapi-echo:80",
-            ],
+            "accept": ["tag:k8s:443", "tag:k8s:80"],
             "deny": [
-                "fastapi-echo:22",
-                "fastapi-echo:8000",
-                "grafana:3000",
-                "alertmanager:9093",
+                "tag:k8s:22",
+                "tag:k8s:8000",
+                "tag:k8s:3000",
+                "tag:k8s:9093",
+                "tag:k8s-operator:443",
+                "tag:k8s-operator:22",
             ],
         },
 
-        // CI must reach nothing but the apiserver service. All three denies are
-        // real regressions worth catching: an app repo's runner reaching another
-        // app's exposure, or reaching the host over SSH.
+        // SSH to the host. This is the one case that needs the "hosts" entry:
+        // it asserts the tcp:22 reachability that Tailscale SSH depends on and
+        // that the "ssh" block below does not itself grant, so deleting the
+        // autogroup:self rule fails here rather than in a terminal later.
+        {
+            "src":    "lestherll@github",
+            "accept": ["homelab:22"],
+        },
+
+        // CI must reach nothing but the apiserver service. Every deny is a real
+        // regression: an app repo's runner reaching an app exposure, reaching
+        // the operator's device, or reaching the host over SSH.
         //
         // Deliberately deny-only. The matching accept would be the grant on
         // svc:kube-apiserver-ci, and a VIP service is not a destination this
-        // tests block can name — the device kube-apiserver-ci-0 is a different
-        // destination that tag:ci is correctly NOT granted, so asserting it
-        // would encode the wrong expectation. That rule's real test is app
-        // registration continuing to work; see docs/zero-touch-app-registration.md.
+        // tests block can name. That rule's real test is app registration
+        // continuing to work; see docs/zero-touch-app-registration.md.
         {
             "src":  "tag:ci",
-            "deny": ["fastapi-echo:443", "grafana:443", "homelab:22"],
+            "deny": ["tag:k8s:443", "tag:k8s:80", "tag:k8s-operator:443", "homelab:22"],
         },
     ],
 }
