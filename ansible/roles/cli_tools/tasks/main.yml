@@ -145,6 +145,46 @@
     mode: "0755"
   when: cnpg_plugin_needs_install
 
+# --- kubelogin: pinned GitHub release zip, checksum-verified ---------------
+# The OIDC exec credential plugin `kubectl` calls out to for the Google OIDC
+# human-access path (LES-104). Installed as a plain kubectl-oidc-login-style
+# binary named kubelogin on PATH; the kubeconfig `exec` block that invokes it
+# is a separate, per-machine step — see AUTH-MODEL-DRAFT.md — because
+# ~/.kube/config is regenerated via talosctl, not owned by Ansible.
+#
+# No version-string install check like the other tools here: `kubelogin
+# --version` prints its build commit hash, not a semver, so there is nothing
+# in its output to match kubelogin_version against. Presence-only check
+# instead — bumping kubelogin_version requires manually removing the old
+# binary first (rm {{ cli_tools_install_dir }}/kubelogin) for a re-run to
+# pick up the new pin.
+
+- name: Check whether kubelogin is already installed
+  ansible.builtin.stat:
+    path: "{{ cli_tools_install_dir }}/kubelogin"
+  register: kubelogin_installed
+
+- name: Determine whether kubelogin needs (re)install
+  ansible.builtin.set_fact:
+    kubelogin_needs_install: "{{ not kubelogin_installed.stat.exists }}"
+
+- name: Download and checksum-verify kubelogin release zip
+  ansible.builtin.get_url:
+    url: "https://github.com/int128/kubelogin/releases/download/v{{ kubelogin_version }}/kubelogin_linux_{{ cli_tools_arch }}.zip"
+    dest: "/tmp/kubelogin_linux_{{ cli_tools_arch }}.zip"
+    checksum: "sha256:https://github.com/int128/kubelogin/releases/download/v{{ kubelogin_version }}/kubelogin_linux_{{ cli_tools_arch }}.zip.sha256"
+    mode: "0644"
+  when: kubelogin_needs_install
+
+- name: Extract and install kubelogin binary
+  ansible.builtin.unarchive:
+    src: "/tmp/kubelogin_linux_{{ cli_tools_arch }}.zip"
+    dest: "{{ cli_tools_install_dir }}"
+    include: [kubelogin]
+    remote_src: true
+    mode: "0755"
+  when: kubelogin_needs_install
+
 # --- awscli: pinned AWS-hosted zip, checksum-verified ----------------------
 # The odd one out in this role. Every other tool here is a drop-in binary;
 # AWS CLI v2 ships a bundle whose own installer lays out

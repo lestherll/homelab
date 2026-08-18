@@ -13,6 +13,11 @@ helm_version: "4.2.3"
 # 2026-08-10.
 cnpg_plugin_version: "1.30.0"
 
+# kubelogin (int128/kubelogin) — the OIDC `exec` credential plugin for
+# `kubectl`, needed for LES-104's Google OIDC human-access path. Re-verified
+# against https://github.com/int128/kubelogin/releases as of 2026-08-18.
+kubelogin_version: "1.36.3"
+
 # AWS CLI v2 — needed to exercise this platform's S3 endpoints (the SeaweedFS
 # gateway behind ObjectStorage) directly from the host, without wiring
 # credentials into a throwaway pod. Re-verified against
