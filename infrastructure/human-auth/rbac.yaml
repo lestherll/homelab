@@ -42,6 +42,11 @@ rules:
   - apiGroups: ["storage.k8s.io"]
     resources: ["storageclasses"]
     verbs: ["get", "list", "watch"]
+  # metrics-server's aggregated API, read-only — without this `kubectl top`
+  # is Forbidden even though metrics-server itself is deployed and healthy.
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["nodes", "pods"]
+    verbs: ["get", "list"]
   # NOTHING granted on rbac.authorization.k8s.io/* or
   # apiextensions.k8s.io/customresourcedefinitions — no self-escalation, no
   # redefining what a CRD even is, even for the one identity this binds to.
