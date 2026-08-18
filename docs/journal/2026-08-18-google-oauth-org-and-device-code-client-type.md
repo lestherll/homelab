@@ -89,4 +89,33 @@ on a single-user cluster is low.
 **Follow-up:** none — `kubelogin` install (Ansible, PR #72) and the
 kubeconfig `exec` block are both done; LES-104 is fully live end-to-end.
 
+**Addendum (2026-08-18, second pass):** `homelab-auth-ext`'s OAuth consent
+screen was left in **Testing** publishing status after the rushed
+project/client rebuild — Testing hard-expires refresh tokens after 7 days
+regardless of use, which would have meant a surprise re-login every week.
+Published it to Production. For non-sensitive scopes (`openid`, `email`)
+this needs no Google verification review — it's a status flip, not a
+submission. Two effects: refresh tokens now follow Google's normal rules
+(persist until ~6 months inactivity or manual revocation) instead of the
+7-day cap, and the 100-test-user allow-list requirement no longer applies.
+Neither changes the actual security boundary — `claimValidationRules`
+already rejects every email but the operator's regardless of who can reach
+Google's consent screen — Testing's user-cap was never what protected the
+cluster.
+
+Also confirmed portability across machines: a second machine (macOS) needs
+its own `kubelogin`/`kubectl-oidc_login` install plus the same three
+kubeconfig entries (cluster/user/context) reproduced there — not a copy of
+`~/.kube/config`, which would also carry the `admin@homelab` non-expiring
+Talos PKI cert along with it. One snag hit doing this: Homebrew's
+`int128/kubelogin/kubelogin` formula installs the binary as
+`kubectl-oidc_login` (kubectl-plugin naming convention), not `kubelogin` —
+the kubeconfig `exec-command` has to match whichever name is actually on
+PATH for that machine's install method.
+
+Separately, switched the default context on this host from `admin@homelab`
+(the non-expiring Talos PKI cluster-admin cert — LES-104's original
+problem, still present as a break-glass credential, now just no longer the
+default) to the new OIDC-scoped `lestherll@homelab` context for daily use.
+
 **Ref:** LES-104, PRs #69/#70/#72, `AUTH-MODEL-DRAFT.md`
