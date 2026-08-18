@@ -185,6 +185,25 @@ locals {
         #
         # Safe on this topology — 10.10.0.10 is a host-only libvirt network
         # reachable from the host and the pod network, not from the LAN.
+        #
+        # CAVEAT, and it applies to kube-proxy, CoreDNS and flannel alike:
+        # THIS DOES NOT RETROFIT A RUNNING CLUSTER. These are Talos *bootstrap*
+        # manifests. Talos re-renders them from config immediately — the
+        # Manifest resource goes to version 2 and ManifestApplyController runs
+        # without error — but it does not push the new render onto an object
+        # that already exists. Verified on v1.13.8, 2026-08-16: config on the
+        # node carried the flag, `talosctl get manifest 10-kube-proxy` showed
+        # `--metrics-bind-address=0.0.0.0`, and the live DaemonSet stayed at
+        # generation 1 without it. The object is stamped
+        # `config.k8s.io/owning-inventory: talos-bootstrap-manifests-inventory`
+        # and owned by `talos / Apply`, which is the tell.
+        #
+        # So a change here reaches the cluster on a REBUILD, not on an apply.
+        # To land it on a live cluster, patch the object to match what Talos
+        # rendered (`talosctl get manifest <id> -o yaml` is the source of
+        # truth — that is not drift, it is catching up). The failure is silent:
+        # terraform reports success and the behaviour does not change. See
+        # AGENT.md for the same caveat as an operational fact.
         proxy = {
           extraArgs = {
             metrics-bind-address = "0.0.0.0"
