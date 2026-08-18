@@ -581,6 +581,14 @@ Full design and build record, including every gotcha hit: `docs/self-service-pla
 
 Full design: `docs/self-service-platform-design-notes.md` §8.
 
+### D17 — Flux's cluster-admin binding: examined and accepted, not narrowed
+
+**Decision.** `kustomize-controller`/`helm-controller` keep running as `cluster-admin` via the stock `cluster-reconciler-flux-system` binding — the broadest privilege grant in the cluster. Investigated during the unified auth-model pass (ADR 0001) and deliberately left as-is.
+
+**Reasoning.** This is D11's Reconciler row made explicit: "Single, needs to see everything by definition; splitting it is theatre." Flux's own docs name `cluster-admin` as the documented default for trusted single-tenant clusters. The only narrower path is full multi-tenancy lockdown — disproportionate to this repo's single-operator scope (§3). A hand-rolled scoped `ClusterRole` also hits Kubernetes' RBAC escalation-prevention rule: granting a role broad enough to create arbitrary future resources requires the granter to already hold everything it might ever delegate, which is an open-ended tax rather than a one-time fix — unlike kro's `rbac.mode: aggregation`, which stays narrow because its resource set is enumerable up front.
+
+**Reverses if:** a second real trust boundary arrives (D16's reversal trigger — isolation needed between humans, not just between repos/apps), at which point Flux's own privilege becomes one of the boundaries that needs re-examining, not just app-registrar's admission policy.
+
 ### 11.14 Remaining open questions
 
 Deliberately unresolved, and recorded so they stay that way consciously.
@@ -633,3 +641,4 @@ Deliberately unresolved, and recorded so they stay that way consciously.
   - `AGENT.md` repo layout updated for `kro/`, `platform-api/`, `postgres/`, `seaweedfs/`, `seaweedfs-runtime/`, and per-app pointer directories. `PR.md` removed from the repo — its findings were fixed during the Phase 0 review cycle it tracked, and it wasn't being kept current as a running log for anything after.
 - **v0.7 (2026-08-13)** — **D4** annotated with its partial realisation: a two-tier storage layout (`local-path-bulk` on the spinning disk, split by access pattern) plus a `platform.homelab/durability` label on some provisioned volumes — neither of which is yet the three-valued, alerted invariant D4 specifies. The decision is unchanged; the divergence is recorded rather than resolved. No new decision recorded for the tiering itself: `docs/storage-tiering-notes.md` and `AGENT.md` carry the mechanism, and this document stays a decision log rather than a work tracker.
 - **v0.6 (2026-08-11)** — D16 revised pre-implementation: the bound-ServiceAccount-token auth model replaced with direct GitHub OIDC federation into k3s, and a `ValidatingAdmissionPolicy` added for real per-repo isolation (previously accepted as absent). Still design-only, not built. Motivated by a broader pass to unify the platform's auth/RBAC model, still in progress — no other decisions changed yet.
+- **v0.8 (2026-08-18)** — D17 recorded: Flux's `cluster-admin` binding examined and accepted as-is, not narrowed (ADR 0001 workstream 2, LES-66). Closes out the unified auth-model pass alongside D16/LES-65/LES-64/LES-104; LES-67 (age-key backup) and LES-108 (deferred multi-user IdP placeholder) tracked separately in Linear, not decisions for this document.
