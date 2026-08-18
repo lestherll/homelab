@@ -310,9 +310,26 @@ spec:
       enabled: false
 
     kube-state-metrics:
+      # CPU limit raised 50m -> 200m, memory 64Mi -> 128Mi, 2026-08-18.
+      # Post-reboot the pod was stuck in CrashLoopBackOff: logs showed a clean
+      # startup (all built-in stores plus the Flux customResourceState config
+      # above) and then nothing — no error, just silence, killed by a failed
+      # liveness/readiness probe (`context deadline exceeded` /
+      # `connection refused`) roughly 30s later, forever. Hubble confirmed
+      # Cilium was not the cause — the probe's SYN reached the pod and the
+      # pod itself sent the RST, i.e. nothing was listening at that moment.
+      # container_cpu_cfs_periods_total / _throttled_periods_total for the
+      # container were 40/40: EVERY scheduling period during its short life
+      # was throttled at the 50m limit, which is what actually starved the
+      # HTTP server past the probe deadline. container_memory_working_set_bytes
+      # also peaked at 57-60Mi across several crashed instances, uncomfortably
+      # close to the old 64Mi cap. 50m/64Mi was sized before customResourceState
+      # added a full list/watch of three more CRD kinds on top of the existing
+      # all-namespaces, all-built-in-kinds watch (including secrets) — 200m/128Mi
+      # gives that initial list room to finish inside the probe window.
       resources:
         requests: { cpu: 10m, memory: 32Mi }
-        limits: { cpu: 50m, memory: 64Mi }
+        limits: { cpu: 200m, memory: 128Mi }
 
       # Flux's own objects, as metrics.
       #
