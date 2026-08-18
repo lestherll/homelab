@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# {{ ansible_managed }}
+#
+# Host-level free-space check for LES-102: the VM's disk images are sparse,
+# so the declared size on each libvirt volume is documentation, not a
+# reservation — several thin images can collectively promise more than the
+# host filesystem has. `df` *inside* the guest reports the guest's view,
+# which is exactly the view that's wrong here, so this has to run on the
+# host, not as an in-cluster check.
+#
+# Checks every mountpoint that backs a storage pool: `/` (system + fast
+# images) and, once mounted, `/mnt/storage` (the bulk image). A path that
+# isn't currently mounted is skipped rather than failing the whole check —
+# `bulk_storage`'s own assert is what guarantees /mnt/storage is mounted
+# when it's supposed to be.
+set -euo pipefail
+
+WARN_THRESHOLD_PERCENT={{ disk_space_warn_threshold_percent }}
+NTFY_TOPIC="{{ ntfy_topic }}"
+CHECK_PATHS=(/ /mnt/storage)
+
+notify() {
+    curl -fsS \
+        -H "Title: Homelab disk space warning" \
+        -H "Priority: high" \
+        -d "$1" \
+        "https://ntfy.sh/${NTFY_TOPIC}" > /dev/null
+}
+
+for path in "${CHECK_PATHS[@]}"; do
+    if ! mountpoint -q "$path" && [ "$path" != "/" ]; then
+        continue
+    fi
+
+    used_percent="$(df --output=pcent "$path" | tail -n1 | tr -dc '0-9')"
+    if [ "$used_percent" -ge "$WARN_THRESHOLD_PERCENT" ]; then
+        notify "${path} is ${used_percent}% full on the homelab host (warn threshold: ${WARN_THRESHOLD_PERCENT}%). Sparse VM images can overcommit this with no warning from inside the guest — see LES-102."
+    fi
+done

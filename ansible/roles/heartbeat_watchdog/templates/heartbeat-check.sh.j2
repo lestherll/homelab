@@ -2,25 +2,40 @@
 # {{ ansible_managed }}
 #
 # "Who watches the watchmen": runs on the bare host, outside the cluster's
-# blast radius. Hits Alertmanager's /-/healthy over its tailnet hostname; on
-# failure, posts to a private ntfy.sh topic. Deliberately a separate
-# notification channel from whatever Alertmanager's own receiver ends up
-# being, so one channel's failure doesn't take down the other.
+# blast radius. Deliberately a separate notification channel from whatever
+# Alertmanager's own receiver ends up being, so one channel's failure doesn't
+# take down the other.
 #
-# Scope: catches "the cluster stopped answering but the host OS is still up",
-# which now includes the VM being down, since the check is an end-to-end HTTP
-# request and does not care why it failed. Does NOT cover the laptop itself
-# dying, and does not distinguish a dead VM from a sick cluster — see LES-98.
+# Two checks, in order, because "the host is up" and "the cluster is up" are
+# not the same statement once Kubernetes runs inside a VM (LES-98):
+#
+# 1. Domain state via virsh — the host detects VM death. Runs as root (this
+#    unit has no User=), so no libvirt group membership is needed.
+# 2. Alertmanager's /-/healthy over its tailnet hostname — Kubernetes detects
+#    workload death. Only reached if the VM is actually running; an in-cluster
+#    job structurally cannot report that the VM is gone, so this script must
+#    do it first, on the host.
 set -euo pipefail
 
+LIBVIRT_DOMAIN="{{ libvirt_domain_name }}"
 ALERTMANAGER_URL="{{ alertmanager_healthy_url }}"
 NTFY_TOPIC="{{ ntfy_topic }}"
 
-if ! curl -fsS --max-time 10 "$ALERTMANAGER_URL" > /dev/null; then
+notify() {
     curl -fsS \
         -H "Title: Homelab heartbeat failed" \
         -H "Priority: urgent" \
-        -d "Alertmanager did not respond healthy at ${ALERTMANAGER_URL}" \
+        -d "$1" \
         "https://ntfy.sh/${NTFY_TOPIC}" > /dev/null
+}
+
+domain_state="$(virsh -c qemu:///system domstate "$LIBVIRT_DOMAIN" 2>&1 || true)"
+if [ "$domain_state" != "running" ]; then
+    notify "libvirt domain '${LIBVIRT_DOMAIN}' is not running (state: ${domain_state})"
+    exit 1
+fi
+
+if ! curl -fsS --max-time 10 "$ALERTMANAGER_URL" > /dev/null; then
+    notify "VM is up but Alertmanager did not respond healthy at ${ALERTMANAGER_URL}"
     exit 1
 fi
