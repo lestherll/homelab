@@ -231,7 +231,11 @@ locals {
             authentication-config = "/etc/kubernetes/auth/authentication-config.yaml"
           }
           extraVolumes = [{
-            hostPath  = "/etc/kubernetes/auth"
+            # hostPath must be under /var — see the machine.files comment
+            # below for why. mountPath is unconstrained (it's the in-container
+            # path, matched by extraArgs.authentication-config above) and
+            # kept at the conventional /etc/kubernetes/auth for readability.
+            hostPath  = "/var/etc/kubernetes/auth"
             mountPath = "/etc/kubernetes/auth"
             readonly  = true
           }]
@@ -246,12 +250,23 @@ locals {
     yamlencode({
       machine = {
         files = [{
-          op   = "create"
-          path = "/etc/kubernetes/auth/authentication-config.yaml"
-          # 384 decimal == 0o600 octal (owner read/write only). yamlencode has
-          # no HCL octal literal to emit, and Talos's Perm field unmarshals a
-          # plain YAML int identically either way.
-          permissions = 384
+          op = "create"
+          # MUST be under /var — Talos's root filesystem is a read-only
+          # squashfs, and `op: create` outside /var fails at boot with
+          # "create operation not allowed outside of /var", which then wedges
+          # the node in a 35-minute reboot loop (kubelet can't write its
+          # bootstrap PKI either, since the same failed-file-write leaves the
+          # machine in a degraded boot). Learned live on 2026-08-17/18 — see
+          # the LES-104 PR history for the incident.
+          path = "/var/etc/kubernetes/auth/authentication-config.yaml"
+          # 420 decimal == 0o644 octal (world-readable). NOT 0o600: the
+          # apiserver container reads this as a non-root process, and a
+          # owner-only file it can't open crash-loops the container with
+          # "permission denied" — also learned live in the same incident.
+          # World-readable is fine here: the volume mount is read-only and the
+          # content (an operator's email + an already-public OAuth client ID)
+          # isn't a secret.
+          permissions = 420
           content     = local.authentication_configuration_yaml
         }]
       }
