@@ -7,3 +7,17 @@ resources:
   # and retires the day metrics-server does.
   - kubelet-serving-cert-approver.yaml
   - helmrelease.yaml
+patches:
+  # Upstream's 32Mi limit OOM-kills the container before controller-runtime
+  # finishes starting (client-go informer + manager overhead), which never
+  # logs anything — the process is killed before it can flush. Observed
+  # crashlooping for 25h+ with zero container output. Verified live: 128Mi
+  # starts clean. Patched here rather than in the vendored file per its own
+  # "don't edit in place" comment.
+  - target:
+      kind: Deployment
+      name: kubelet-serving-cert-approver
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 128Mi
