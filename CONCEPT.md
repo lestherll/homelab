@@ -428,6 +428,8 @@ Promotion to `prod` stays a hand-written commit pinning a digest — which is th
 
 **Reverses if:** a second machine arrives and a dedicated non-production cluster becomes affordable — at which point the directory structure already maps onto it.
 
+**Amended (D18):** the reversal trigger got cheaper, not closer. The Talos/Terraform node platform means a second cluster — on this same machine or a future second one — is a `terraform apply` away rather than a re-image, so the day this decision reverses is now a scheduling question, not a rebuild.
+
 ### D4 — Durable state inventory
 
 **Decision.** Three classes, enforced mechanically rather than documented.
@@ -485,6 +487,8 @@ Three tiers by blast radius:
 | 3 | Workloads | Trivial; roll back by git revert |
 
 **The move that makes this cheap:** S3 already requires periodic rebuilds from bare metal. Where possible, the **rebuild is the tier 1 upgrade mechanism** — one Saturday produces both an upgrade and a verified restore test.
+
+**Amended (D18):** Talos brings its own in-place upgrade path, which splits tier 1 into two philosophies rather than one. Routine OS/Kubernetes version movement now uses Talos's native upgrade — no rebuild required. The rebuild-and-reattach stops being the *upgrade* mechanism and becomes the tier 1 *recovery and replacement* mechanism instead: still rehearsed, still the thing that proves recovery works, just no longer the only road forward for routine version bumps.
 
 ### D10 — Internet outage behaviour
 
@@ -589,6 +593,27 @@ Full design: `docs/self-service-platform-design-notes.md` §8.
 
 **Reverses if:** a second real trust boundary arrives (D16's reversal trigger — isolation needed between humans, not just between repos/apps), at which point Flux's own privilege becomes one of the boundaries that needs re-examining, not just app-registrar's admission policy.
 
+### D18 — Node platform: a hypervisor layer under the cluster
+
+**Decision.** Ubuntu stays on the metal, re-scoped to exactly one job: be a hypervisor. Terraform provisions a single Talos VM as a libvirt domain; Talos supplies immutable, API-managed Kubernetes nodes; Flux is unchanged above that line. Executed 2026-08-16, replacing bare-metal k3s. Layering, made explicit:
+
+```
+Ansible   → configure a mutable physical machine
+Terraform → declare infrastructure objects
+Talos     → provide immutable Kubernetes nodes
+Flux      → reconcile Kubernetes state
+```
+
+**Reasoning.** Bare-metal k3s conflated two concerns Ansible had no business owning together: keeping the physical host sane, and keeping a Kubernetes distribution patched and configured. Every Kubernetes-shaped fact — CNI, storage classes, node config — lived in Ansible variables and playbooks instead of in git-reconciled cluster state, which is exactly the coupling C1's self-service abstraction and D4's durable-state labelling both assume doesn't exist. Putting Talos in a VM turns "rebuild the node" into a declared Terraform object instead of a re-provisioned physical machine, and makes **Ansible must never know about Kubernetes** enforceable rather than aspirational — its job shrinks to packages, firewall, libvirt networks/pools, and the operator's CLI tools.
+
+**What this makes cheap, concretely:** D3's environment-model reversal (single cluster → a second one) is now a `terraform apply`, not a re-image. D8's tier-1 upgrade mechanism gains a second philosophy — Talos's native in-place upgrade — alongside the rehearsed rebuild, rather than only the rebuild. D4's durable-state labelling gets real enforcement for free: the cluster sets no default StorageClass, so an unclassified volume stays `Pending` instead of landing silently wherever the distribution defaults to.
+
+**Worth stating plainly: this migration is invisible to app authors.** The operating system, the provisioning tool, and the storage layer all got replaced underneath the platform API, and the consumer contract — `Database`/`ObjectStorage`/`Application` YAML — did not move. The one field that changed (storage class names) got simpler, not different in kind. That is the strongest available evidence the self-service abstraction (D15) was drawn in the right place: a rewrite this deep below it produced zero required changes above it.
+
+**Reverses if:** a second machine arrives and the hypervisor/cluster split stops paying for itself relative to just running Talos on bare metal again — recorded as Alternative A in `docs/talos-terraform-migration-notes.md` and never eliminated, only deprioritised.
+
+Full design, coupling audit, and execution log: `docs/talos-terraform-migration-notes.md`. Cutover procedure: `docs/talos-cutover-runbook.md`.
+
 ### 11.14 Remaining open questions
 
 Deliberately unresolved, and recorded so they stay that way consciously.
@@ -642,3 +667,4 @@ Deliberately unresolved, and recorded so they stay that way consciously.
 - **v0.7 (2026-08-13)** — **D4** annotated with its partial realisation: a two-tier storage layout (`local-path-bulk` on the spinning disk, split by access pattern) plus a `platform.homelab/durability` label on some provisioned volumes — neither of which is yet the three-valued, alerted invariant D4 specifies. The decision is unchanged; the divergence is recorded rather than resolved. No new decision recorded for the tiering itself: `docs/storage-tiering-notes.md` and `AGENT.md` carry the mechanism, and this document stays a decision log rather than a work tracker.
 - **v0.6 (2026-08-11)** — D16 revised pre-implementation: the bound-ServiceAccount-token auth model replaced with direct GitHub OIDC federation into k3s, and a `ValidatingAdmissionPolicy` added for real per-repo isolation (previously accepted as absent). Still design-only, not built. Motivated by a broader pass to unify the platform's auth/RBAC model, still in progress — no other decisions changed yet.
 - **v0.8 (2026-08-18)** — D17 recorded: Flux's `cluster-admin` binding examined and accepted as-is, not narrowed (ADR 0001 workstream 2, LES-66). Closes out the unified auth-model pass alongside D16/LES-65/LES-64/LES-104; LES-67 (age-key backup) and LES-108 (deferred multi-user IdP placeholder) tracked separately in Linear, not decisions for this document.
+- **v0.9 (2026-08-18)** — D18 recorded: the Ansible/Terraform/Talos node-platform split (hypervisor on the metal, Talos VM above it), executed 2026-08-16, replacing bare-metal k3s (LES-101). D3 and D8 amended accordingly — D3's reversal trigger is now a `terraform apply`, D8 gains Talos's native in-place upgrade as a second tier-1 philosophy alongside the rehearsed rebuild. D4's earlier divergence note (no default StorageClass) already covered the durability-enforcement half of this migration, so no further D4 change was needed.
