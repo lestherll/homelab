@@ -45,6 +45,25 @@ spec:
     # that chunking behavior was not itself re-verified here — worth an
     # explicit test the first time a genuinely large object is stored.
     volumeSizeLimitMB: 100
+    # Sized 2026-08-18 against two days of live metrics: steady state 2m /
+    # 31Mi, 2d peak 3m / 179Mi (bootstrap). Every component here ran with no
+    # requests and no limits until now, which meant the scheduler accounted
+    # this cluster as free and nothing capped it — see the note on `volume`
+    # below for why an uncapped SeaweedFS is the one worth fixing first.
+    #
+    # NOTE the operator flattens `requests`/`limits` straight into the
+    # container's ResourceRequirements — there is no `resources:` wrapper,
+    # and these are the same two maps `volume` uses for its PVC size. The
+    # operator's filterContainerResources() strips only the `storage` key on
+    # its way to the container (confirmed in internal/controller/helper.go
+    # against 1.0.34), which is what lets storage and compute share one map
+    # without the container spec being rejected.
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
 
   # PVC-backed, on the bulk tier: volume data is the platform's own
   # analogue of a Postgres PGDATA volume — losing it loses every object in
@@ -62,8 +81,24 @@ spec:
   # the note above exists to protect.
   volume:
     replicas: 1
+    # `storage` sizes the PVC; `cpu`/`memory` size the container. One map,
+    # two destinations — see the note on `master` above.
+    #
+    # Sized 2026-08-18: steady state 1m / 28Mi, 2d peak 3m / 38Mi. The
+    # memory limit is deliberately far above that, because this is the one
+    # component whose footprint tracks stored data — the needle index is
+    # held in memory, so it grows with object count, and at
+    # volumeSizeLimitMB: 100 against the bulk tier there is room for ~1000
+    # volume containers. 512Mi is a ceiling that stops a runaway from taking
+    # the node, not a prediction; revisit it when real objects land, since
+    # today's 38Mi peak is measured against an essentially empty cluster.
     requests:
       storage: 5Gi
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
     storageClassName: bulk
     labels:
       platform.homelab/durability: durable
@@ -71,6 +106,20 @@ spec:
 
   filer:
     replicas: 1
+    # Sized 2026-08-18: steady state 4m / 108Mi, 2d peak 6m / 250Mi — the
+    # heaviest of the four, and the only one whose peak is far enough above
+    # its steady state to matter. Like `volume`, its memory tracks stored
+    # data (leveldb2 index + cache), so the limit is set for growth rather
+    # than against today's number.
+    #
+    # Compute only here — the filer's disk size comes from
+    # `persistence.resources` below, not from this map.
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
     # Metadata store: same leveldb2 shape the operator's own sample uses.
     config: |
       [leveldb2]
@@ -106,6 +155,16 @@ spec:
   # S3Identity/S3Credentials/S3Policy/S3PolicyBinding work at all.
   s3:
     replicas: 1
+    # Sized 2026-08-18: steady state 1m / 30Mi, 2d peak 5m / 50Mi. A
+    # stateless gateway — its footprint tracks request concurrency, not
+    # stored data, which is why this is the one of the four whose limit can
+    # sit close to observed peak.
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi
     metricsPort: 9413
     # Setting metricsPort here also makes the operator auto-provision a
     # ServiceMonitor (confirmed in the operator's Go source — S3 and SFTP
