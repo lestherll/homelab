@@ -7,3 +7,8 @@
   ansible.builtin.systemd:
     name: heartbeat-watchdog.timer
     state: restarted
+
+- name: restart disk-space-watchdog timer
+  ansible.builtin.systemd:
+    name: disk-space-watchdog.timer
+    state: restarted

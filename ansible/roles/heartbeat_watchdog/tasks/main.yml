@@ -38,11 +38,45 @@
     - reload systemd for heartbeat-watchdog
     - restart heartbeat-watchdog timer
 
-- name: Flush handlers before enabling the timer
+- name: Install disk space check script
+  ansible.builtin.template:
+    src: disk-space-check.sh.j2
+    dest: /usr/local/bin/disk-space-check.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install disk-space-watchdog systemd service
+  ansible.builtin.template:
+    src: disk-space-watchdog.service.j2
+    dest: /etc/systemd/system/disk-space-watchdog.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: reload systemd for heartbeat-watchdog
+
+- name: Install disk-space-watchdog systemd timer
+  ansible.builtin.template:
+    src: disk-space-watchdog.timer.j2
+    dest: /etc/systemd/system/disk-space-watchdog.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - reload systemd for heartbeat-watchdog
+    - restart disk-space-watchdog timer
+
+- name: Flush handlers before enabling the timers
   ansible.builtin.meta: flush_handlers
 
 - name: Enable and start heartbeat-watchdog timer
   ansible.builtin.systemd:
     name: heartbeat-watchdog.timer
+    enabled: true
+    state: started
+
+- name: Enable and start disk-space-watchdog timer
+  ansible.builtin.systemd:
+    name: disk-space-watchdog.timer
     enabled: true
     state: started

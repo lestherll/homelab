@@ -1,0 +1,8 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Homelab host disk space check (sparse VM image overcommit)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/disk-space-check.sh
