@@ -64,7 +64,7 @@ locals {
       - issuer:
           url: https://accounts.google.com
           audiences:
-            - 223671181580-7798jpn1klsms7jiel4vo6877rtnj81q.apps.googleusercontent.com
+            - 645380473983-4r5f3jhh1thajbun7bj1t28o4o4mds0d.apps.googleusercontent.com
         claimMappings:
           username:
             claim: email
