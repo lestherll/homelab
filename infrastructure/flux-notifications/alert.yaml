@@ -70,3 +70,41 @@ spec:
     # Same shape: a HelmRelease whose CRDs are still being installed by another
     # release retries and succeeds on its own.
     - "no matches for kind"
+    # Transient network failures, which recover on the next retry and are not
+    # something anybody can act on inside the retry interval. Observed
+    # 2026-08-23: a ~11-second loss of outbound UDP on the host's uplink made
+    # source-controller's DNS lookups time out, failing the flux-system
+    # GitRepository and the seaweedfs-operator HelmRepository at once. Both
+    # recovered on their own 11 seconds later; the notification was pure noise.
+    #
+    # This is only safe because it is NOT the only net. `FluxResourceNotReady`
+    # in infrastructure/observability/alerts/flux.yaml fires on
+    # gotk_resource_info{ready="False"} with `for: 30m`, so a network failure
+    # that genuinely persists still reports — just later, and via the path that
+    # has a duration filter. The division of labour: events carry the error
+    # string, metrics decide whether it lasted. Excluding a transient here
+    # costs 30 minutes of notice on a class of failure that cannot be fixed in
+    # 30 minutes anyway.
+    #
+    # Scoped to the DNS-resolution shape (`lookup <name> on <server>`) rather
+    # than to timeouts generally, and the narrowness is load-bearing. Three
+    # broader patterns were tried and rejected against real counterexamples:
+    #   "context deadline exceeded"    also matches a genuine
+    #                                  `Helm upgrade failed ...` timeout
+    #   "connection refused"           also matches an admission webhook down
+    #   "dial tcp.*connection refused" same — a cluster-internal dial by IP
+    #                                  ("dial tcp 10.96.1.5:443: connect:
+    #                                  connection refused") is a real, lasting
+    #                                  failure whose error string is the point
+    # A failed `lookup` cannot be reached by IP and so cannot describe those.
+    #
+    # These match on message text, which is Flux-version-dependent: a reworded
+    # error silently stops matching. That fails safe (noisy, never silent).
+    # Verified against notification-controller v1.8.4 / source-controller
+    # v1.8.5 (flux v2.8.8), 2026-08-24.
+    - "lookup .* on .*i/o timeout"
+    # Anticipated rather than observed: the same transient class reaching a
+    # chart or image registry, where the connection is made but the handshake
+    # never completes. Included because it is unambiguously a network event and
+    # cannot describe anything in-cluster; remove it if it never fires.
+    - "TLS handshake timeout"
