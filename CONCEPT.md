@@ -418,6 +418,8 @@ Promotion to `prod` stays a hand-written commit pinning a digest — which is th
 
 **Cost:** one more controller, and image tagging policy becomes load-bearing rather than incidental.
 
+**Amended (D19):** the "one more controller" this decision priced in never got built, because D16 (zero-touch registration) moved every app's manifest out of this repo before D2 was implemented — a registry-watching reconciler would need a *cross-repo* git write credential to reach the manifest, a cost D2 didn't anticipate. D19 gives up this decision's literal guarantee (the build runner holds "no git write credential at all") in exchange for a narrower one: the build runner's write credential is scoped to the one repo whose code it already executes, never another. Whether that's a real weakening or a distinction without a difference was the open question D19 had to settle — see D19 for the reasoning.
+
 ### D3 — Environment model
 
 **Decision.** Single cluster. Namespace per `(application, environment)`. One config repo with a directory per environment, sharing base manifests through per-environment overlays. Promotion is a commit changing a pinned digest in the target directory.
@@ -614,13 +616,27 @@ Flux      → reconcile Kubernetes state
 
 Full design, coupling audit, and execution log: `docs/talos-terraform-migration-notes.md`. Cutover procedure: `docs/talos-cutover-runbook.md`.
 
+### D19 — Image tagging & delivery: CI-written digest pin, event-driven reconcile
+
+**Decision.** Every build tags its image with the commit SHA (already happening) but the *deployment* pins by **digest**, never by a floating tag. The app's own build workflow — not a separate reconciler — writes the digest into its own `deploy/application.yaml` and pushes that commit to its own repo, using the `contents: write` permission it already effectively has by virtue of executing that repo's own code. Flux picks the commit up immediately rather than on its 5-minute poll: `register.yml`, which already runs on every push to `main` and already holds a short-lived cluster token via the D16 tailnet+OIDC chain, force-reconciles its `GitRepository`/`Kustomization` via the `reconcile.fluxcd.io/requestedAt` annotation.
+
+Resolves open question 3 below (§11.14) and the "harder half" LES-73 identified in D2's realisation: who writes the tag-bump commit, and where.
+
+**Rejected alternative: Flux image-reflector/image-automation controllers**, watching the registry and writing the bump themselves — the mechanism D2 originally assumed. Rejected because D16 already moved every app's manifest into the app's own repo, so this would need a **new cross-repo git-write credential**, one per app, into repos this platform doesn't otherwise touch — a new entry in the functional-identity map (D11) for a capability the chosen alternative gets without it. It would also still be poll-based at the registry-watching layer, just on a shorter interval, rather than event-driven.
+
+**Rejected alternative: a public GitHub webhook into Flux's notification-controller**, which already ships a `Receiver` CRD and a `webhook-receiver` Service, unused. Rejected because it requires a publicly reachable endpoint (via Tailscale Funnel or similar) — the first thing in this repo exposed off the tailnet, which every other exposure decision here (D9/D10, tailscale-runtime, tailnet-only apiserver access) has deliberately avoided. The chosen mechanism gets the same event-driven property by having the CI job that already holds tailnet+cluster access push the reconcile signal itself, instead of having GitHub push it in from outside.
+
+**Cost:** each app's build workflow gains a commit-and-push step and a `paths-ignore: [deploy/**]` guard against re-triggering itself on its own digest-pin commit. `register.yml`'s copyable template (`docs/zero-touch-app-registration.md`) gains one more step, still generic across every app repo.
+
+**Reverses if:** the number of app repos grows enough that duplicating this step per repo (rather than centralising it in a reconciler) becomes the more expensive path — at which point the cross-repo-credential cost D19 rejected needs re-pricing against that duplication cost.
+
 ### 11.14 Remaining open questions
 
 Deliberately unresolved, and recorded so they stay that way consciously.
 
 1. **Does anything ever get exposed publicly?** (was Q9.) Parked. If the answer becomes yes, it requires a separate threat model and a separate document — not an amendment to this one.
 2. **Remote desktop / GUI environments.** Parked at v0.1 and still parked (§5.2).
-3. **Image tagging policy.** D2 makes this load-bearing: the reconciler's tag-matching policy is now the mechanism by which code reaches production. Semver, timestamp, commit SHA, or a combination — undecided, and worth deciding carefully rather than by default.
+3. ~~**Image tagging policy.**~~ Resolved — SHA tag, digest-pinned deployment, written by the build runner itself (D19).
 4. **Is publishing OIDC discovery documents acceptable?** D13 depends on it for federated backup credentials. Low risk, but it's the first thing in the design that puts anything cluster-derived on the public internet.
 5. **What reliably suppresses idle reclamation?** D6's sentinel file is a mechanism, not a guarantee. Whether something more reliable is worth the complexity is a question for after the first time it bites.
 
@@ -668,3 +684,4 @@ Deliberately unresolved, and recorded so they stay that way consciously.
 - **v0.6 (2026-08-11)** — D16 revised pre-implementation: the bound-ServiceAccount-token auth model replaced with direct GitHub OIDC federation into k3s, and a `ValidatingAdmissionPolicy` added for real per-repo isolation (previously accepted as absent). Still design-only, not built. Motivated by a broader pass to unify the platform's auth/RBAC model, still in progress — no other decisions changed yet.
 - **v0.8 (2026-08-18)** — D17 recorded: Flux's `cluster-admin` binding examined and accepted as-is, not narrowed (ADR 0001 workstream 2, LES-66). Closes out the unified auth-model pass alongside D16/LES-65/LES-64/LES-104; LES-67 (age-key backup) and LES-108 (deferred multi-user IdP placeholder) tracked separately in Linear, not decisions for this document.
 - **v0.9 (2026-08-18)** — D18 recorded: the Ansible/Terraform/Talos node-platform split (hypervisor on the metal, Talos VM above it), executed 2026-08-16, replacing bare-metal k3s (LES-101). D3 and D8 amended accordingly — D3's reversal trigger is now a `terraform apply`, D8 gains Talos's native in-place upgrade as a second tier-1 philosophy alongside the rehearsed rebuild. D4's earlier divergence note (no default StorageClass) already covered the durability-enforcement half of this migration, so no further D4 change was needed.
+- **v0.10 (2026-08-24)** — D19 recorded: image tagging policy resolved (SHA tag, digest-pinned deployment) and D2's build/deploy boundary realised as CI-written commits rather than a registry-watching reconciler, closing LES-57 and LES-73. D2 amended: its "no git write credential at all" guarantee narrows to "no *cross-repo* git write credential," because D16 (recorded after D2) moved app manifests out of this repo and made the originally-priced-in reconciler need a new cross-repo credential to reach them. §11.14 open question 3 (tagging policy) resolved and struck.
