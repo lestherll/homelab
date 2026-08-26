@@ -174,10 +174,32 @@ jobs:
               kind: GitRepository
               name: ${{ github.event.repository.name }}
           YAML
+
+      - name: Trigger immediate reconcile
+        run: |
+          now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          kubectl --server="https://${{ secrets.HOMELAB_APISERVER }}" \
+                  --token="$TOKEN" -n flux-system \
+                  annotate gitrepository ${{ github.event.repository.name }} \
+                  reconcile.fluxcd.io/requestedAt="$now" --overwrite
+          kubectl --server="https://${{ secrets.HOMELAB_APISERVER }}" \
+                  --token="$TOKEN" -n flux-system \
+                  annotate kustomization ${{ github.event.repository.name }} \
+                  reconcile.fluxcd.io/requestedAt="$now" --overwrite
 ```
 
 `--server-side` is deliberate: server-side apply needs only `patch`, which
 keeps the Role's verb list honest about what CI actually does.
+
+The reconcile-trigger step is what makes this workflow double as the
+event-driven half of image delivery (homelab CONCEPT.md D19). Flux's own poll
+interval on these two objects is 5 minutes — fine for the registration
+pointers themselves, but this workflow runs on *every* push to `main`,
+including the digest-pin commits an app's `build.yml` pushes after each image
+build. Without this step, a new image would sit unreconciled for up to 5
+minutes; with it, the annotation (Flux's standard reconcile-now signal) forces
+an immediate re-fetch and re-apply. No new credential: `annotate` is a `patch`
+under the hood, already granted to the token minted above.
 
 `--force-conflicts` is deliberate too, and is about **adoption**, not about
 overriding anyone. An object these workflows inherit from a hand-written
