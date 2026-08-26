@@ -193,13 +193,31 @@ keeps the Role's verb list honest about what CI actually does.
 
 The reconcile-trigger step is what makes this workflow double as the
 event-driven half of image delivery (homelab CONCEPT.md D19). Flux's own poll
-interval on these two objects is 5 minutes — fine for the registration
-pointers themselves, but this workflow runs on *every* push to `main`,
-including the digest-pin commits an app's `build.yml` pushes after each image
-build. Without this step, a new image would sit unreconciled for up to 5
-minutes; with it, the annotation (Flux's standard reconcile-now signal) forces
-an immediate re-fetch and re-apply. No new credential: `annotate` is a `patch`
-under the hood, already granted to the token minted above.
+interval on these two objects is 5 minutes, so without this step a new image
+would sit unreconciled for up to that long; the annotation is Flux's standard
+reconcile-now signal and forces an immediate re-fetch and re-apply. No new
+credential: `annotate` is a `patch` under the hood, already granted to the
+token minted above.
+
+**This workflow does not see an app's digest-pin commits on its own**, which is
+why `build.yml` dispatches it. Those commits are pushed with the default
+`GITHUB_TOKEN`, and GitHub suppresses workflow runs from events raised with
+that token — so the `on: push` trigger above never fires for them, silently.
+The build workflow therefore ends with:
+
+```yaml
+      - name: Ask the platform to reconcile
+        if: steps.pin.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run register.yml --ref main -f action=register
+```
+
+`workflow_dispatch` is an explicit exception to that suppression rule, so the
+deliberate call works where the implicit event does not. It needs
+`actions: write` in the build workflow's `permissions:` block and nothing else
+— no new credential, and no copy of any cluster-access logic outside this
+file.
 
 `--force-conflicts` is deliberate too, and is about **adoption**, not about
 overriding anyone. An object these workflows inherit from a hand-written
