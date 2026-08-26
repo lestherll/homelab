@@ -53,7 +53,21 @@ locals {
       - issuer:
           url: https://token.actions.githubusercontent.com
           audiences:
-            - https://github.com/lestherll
+            # MUST match the audience CI actually requests
+            # (`&audience=homelab-k8s` in each app repo's register.yml), not
+            # GitHub's default audience. The default is the repository-owner
+            # URL, `https://github.com/lestherll`, which is what this said
+            # from the AuthenticationConfiguration migration (1d802bb) until
+            # 2026-08-26 — plausible-looking, and it silently broke every CI
+            # call to the cluster for five days.
+            #
+            # A deliberately-chosen audience is a scoping control, which is
+            # the reason not to use the default: a token GitHub minted for
+            # some other integration cannot be replayed against the cluster,
+            # because it carries that integration's audience rather than this
+            # one. Changing this value means changing register.yml in every
+            # app repo at the same time.
+            - homelab-k8s
         claimMappings:
           username:
             claim: sub
