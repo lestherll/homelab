@@ -112,9 +112,17 @@ variable "network_name" {
 
 variable "node_ip" {
   description = <<-EOT
-    Static address of the node. Known before bootstrap on purpose: it is baked
-    into the apiserver certificate via certSANs, and a DHCP-assigned address
-    would make that a chicken-and-egg problem.
+    Static address of the node. Known before bootstrap on purpose: it is both
+    the cluster endpoint and the machine.certSANs entry, and a DHCP-assigned
+    address would make that a chicken-and-egg problem.
+
+    Precisely, because the distinction bites the moment a VIP exists:
+    machine.certSANs covers apid/trustd/the kubelet, NOT the apiserver. The
+    apiserver's certificate covers this address only because it happens to be
+    cluster_endpoint. Once the endpoint becomes a VIP, individual node
+    addresses stop being covered and kubectl aimed straight at a node fails
+    x509 — so a multi-node build must set cluster.apiServer.certSANs
+    explicitly. See docs/fleet/fleet-provisioning-design-notes.md §6.5.
   EOT
   type        = string
 }
