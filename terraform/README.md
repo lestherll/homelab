@@ -49,7 +49,7 @@ isn't needed.
 
 ```bash
 # 1. Host prep — hypervisor packages, libvirt network, storage pools.
-sudo ansible-playbook -i ansible/inventory/hosts.ini \
+ansible-playbook -i ansible/inventory/hosts.ini \
   ansible/playbooks/converge.yml --tags host_prereqs,bulk_storage,cli_tools
 
 # 2. Stage the Talos disk image. The qemu-guest-agent schematic is pinned as
