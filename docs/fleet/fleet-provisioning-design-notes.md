@@ -713,14 +713,23 @@ one.
   links the age library rather than calling the CLI (verified by decrypting with
   `age` off `PATH`).
 
-  > **The age key path is OS-dependent, and the error does not say so.** sops
-  > resolves it with Go's `os.UserConfigDir()` — `~/.config` on Linux,
-  > `~/Library/Application Support` on **macOS**. A key at
-  > `~/.config/sops/age/keys.txt` on a Mac is not found, and the failure reads
-  > *"no master key was able to decrypt the file"*, naming neither the path it
-  > looked in nor the one you used. It looks like a wrong key and is a missing
-  > file. Cost about ten minutes on 2026-08-30 with a key whose public half
-  > provably matched `.sops.yaml`.
+  > **The age key path is a per-machine fact, and the error does not say so.**
+  > Nothing in the repo configures it — deliberately, since where a control node
+  > keeps its key belongs to that machine, like `~/.ssh`. sops looks in
+  > `<os.UserConfigDir()>/sops/age/keys.txt`, which is Go's: `$XDG_CONFIG_HOME`
+  > when set, `~/.config` on Linux otherwise, `~/Library/Application Support` on
+  > macOS. `SOPS_AGE_KEY_FILE` overrides it anywhere that rule is unclear.
+  >
+  > Placing the key where sops already looks — rather than exporting the
+  > override — is what keeps a control node **zero-configuration**, which is the
+  > property this section depends on when it claims the choice of control node
+  > is reversible. It also means one file serves both the vars plugin and bare
+  > `sops` for editing secrets.
+  >
+  > When it is wrong the failure reads *"no master key was able to decrypt the
+  > file"*, naming neither the path searched nor the one you used — it looks
+  > like a wrong key and is a missing file. Cost about ten minutes on
+  > 2026-08-30 against a key whose public half provably matched `.sops.yaml`.
 
   What [§3](#3-inventory-group-by-capability-never-by-machine) buys is that the
   choice stays *reversible*: with no `connection=local` special case, either
