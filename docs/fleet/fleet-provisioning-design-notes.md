@@ -1,9 +1,18 @@
 # Fleet provisioning design notes
 
-**Status:** design only. Nothing here is built. Written 2026-08-30, after
-`homelab-worker-0` arrived on the LAN and the question became not *what should
-this one machine run* but *what shape lets any number of machines be added
-without re-deciding each time*.
+**Status:** written 2026-08-30 as design only, after `homelab-worker-0` arrived
+on the LAN and the question became not *what should this one machine run* but
+*what shape lets any number of machines be added without re-deciding each time*.
+
+**Partly executed since — [§8](#8-sequencing)'s M1 is under way, so the present
+tense below is the pre-change state, not today's.** Built: M1.1 (`late-commands`
+NOPASSWD drop-in), M1.2 (machine 1's planted by hand), and the *SSH half* of
+M1.3 — `hosts.ini` no longer says `ansible_connection=local`, and `ansible.cfg`,
+AGENT.md and `converge.yml` have dropped the `sudo -v` ritual and the top-level
+`sudo` wrapper per [§2.4](#24-what-survives-in-ansiblecfg). **Not** built: the
+capability grouping and var relocation of [§3](#3-inventory-group-by-capability-never-by-machine)
+— which is why AGENT.md's three `ntfy_topic` paths are still accurate — and
+everything from M1.4 onward. Sections 4-9 remain design only.
 
 Deliberately **not** referenced from `CONCEPT.md`. It proposes changes to
 `ansible/` and `terraform/` but supersedes no decision; D18 in particular stands
