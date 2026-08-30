@@ -6,3 +6,8 @@ HANDOFF.md
 # Scratch design drafts — same reasoning as HANDOFF.md above. Promote content
 # into a real infrastructure/ manifest or docs/ note when it's actually built.
 AUTH-MODEL-DRAFT.md
+
+# Ansible collections, installed into the checkout rather than the control
+# node's shared path (see collections_path in ansible.cfg). Reproduced from
+# ansible/requirements.yml, so it is build output, not source.
+ansible/collections/

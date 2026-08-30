@@ -704,6 +704,24 @@ one.
   and today's single copy is the deviation. A working key on the Mac is not
   that backup, though — the backup remains unbuilt and belongs elsewhere.
 
+  **Setting the Mac up, done 2026-08-30.** `ansible-core` via `uv tool`;
+  collections into the checkout rather than the shared path (`collections_path`
+  in `ansible.cfg`, gitignored) so `requirements.yml`'s pins actually bind; and
+  one pinned, checksum-verified `sops` binary matching `cli_tools`'
+  `sops_version`, so control node and managed hosts stay on one version.
+  **`age` is not needed** — `community.sops` shells out to `sops`, and `sops`
+  links the age library rather than calling the CLI (verified by decrypting with
+  `age` off `PATH`).
+
+  > **The age key path is OS-dependent, and the error does not say so.** sops
+  > resolves it with Go's `os.UserConfigDir()` — `~/.config` on Linux,
+  > `~/Library/Application Support` on **macOS**. A key at
+  > `~/.config/sops/age/keys.txt` on a Mac is not found, and the failure reads
+  > *"no master key was able to decrypt the file"*, naming neither the path it
+  > looked in nor the one you used. It looks like a wrong key and is a missing
+  > file. Cost about ten minutes on 2026-08-30 with a key whose public half
+  > provably matched `.sops.yaml`.
+
   What [§3](#3-inventory-group-by-capability-never-by-machine) buys is that the
   choice stays *reversible*: with no `connection=local` special case, either
   machine works, and machine 1 running playbooks against itself over SSH is the
