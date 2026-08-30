@@ -171,6 +171,40 @@
     state: present
     update_cache: true
 
+# Two rules from the k3s era that this role does not declare and no longer
+# wants: 9100/tcp (node-exporter) and 6443/tcp (the k3s API), both on the
+# tailnet interface. Both services moved INTO the guest at the Talos cutover,
+# so they contradict the model stated in the comment block below — the host
+# serves no cluster port at all.
+#
+# They were inert, not exposed: nothing on the host listened on either
+# (`ss -tlnp`, 2026-08-30). Removing them anyway, for two reasons. They
+# misreport the system to anyone reading `ufw status` during an incident, since
+# "k3s API" names something that has not existed since the cutover. And they
+# are pre-armed for a service that does not exist yet: the day a host-level
+# node-exporter lands (LES-97, which the VM's empty /sys/class/powercap makes
+# likely), :9100 would become tailnet-reachable with nobody having decided it.
+#
+# Declared rather than deleted by hand, following the superseded sysctl drop-in
+# above: this role adds rules and never prunes them, so absence only becomes
+# true by being stated. A hand-run `ufw delete` would leave the next person to
+# add the rule back unopposed.
+#
+# Safe to delete this task once machine 1 has been rebuilt — a fresh host never
+# has these rules, so it is a tombstone for one machine's history rather than a
+# permanent part of the model. LES-157.
+- name: Remove superseded k3s-era ufw rules
+  community.general.ufw:
+    rule: allow
+    interface: "{{ tailscale_interface | default('tailscale0') }}"
+    direction: in
+    port: "{{ item }}"
+    proto: tcp
+    delete: true
+  loop:
+    - "9100"
+    - "6443"
+
 # NOTHING IN THE CLUSTER NEEDS A HOST INBOUND RULE. The Kubernetes API,
 # node-exporter and every workload listen inside the guest, on a NAT'd network
 # the LAN cannot route to at all — so the host firewall is not what protects
