@@ -93,6 +93,41 @@
     name: "{{ libvirt_talos_network_name }}"
     autostart: true
 
+# Reopens tcp/50000 into the Talos VM, which libvirt's NAT network otherwise
+# REJECTs — see the header of the template for the full mechanism and for why
+# neither ufw nor a persisted iptables rule can do this job. Both tasks are
+# needed and they cover different moments: the hook makes it true after every
+# reboot and network restart, this role makes it true now.
+- name: Install the libvirt network hook that exposes the Talos machine API
+  ansible.builtin.template:
+    src: libvirt-network-hook.j2
+    dest: /etc/libvirt/hooks/network
+    owner: root
+    group: root
+    mode: "0755"
+  notify: restart libvirtd
+
+# Hooks are read by the daemon at startup, so a newly written script is inert
+# until it restarts — the trap being that everything looks correct on disk
+# while nothing runs it. Flushed here rather than at the end of the play so
+# the task below calls a script the daemon already knows about.
+- name: Pick up the new hook before using it
+  ansible.builtin.meta: flush_handlers
+
+# Invokes the hook itself rather than restating the rule as an Ansible
+# iptables task: one implementation, so the converged host and the rebooted
+# host cannot drift. Arguments mimic libvirt's own call.
+#
+# changed_when: false because the script is idempotent by construction
+# (`iptables -C` before `-I`), so a re-run genuinely changes nothing — which
+# is what keeps this role's `changed=0` re-run check meaningful.
+- name: Apply the Talos machine API forward rule now
+  ansible.builtin.command:
+    cmd: >-
+      /etc/libvirt/hooks/network
+      {{ libvirt_talos_network_name }} started begin -
+  changed_when: false
+
 # SSD-backed pool. The HDD-backed pool is deliberately NOT here — it lives in
 # bulk_storage, behind that role's mount assert, because an unmounted
 # /mnt/storage at image-creation time would silently put the bulk image on the

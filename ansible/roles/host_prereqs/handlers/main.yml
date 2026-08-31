@@ -2,3 +2,17 @@
 - name: reload ufw
   community.general.ufw:
     state: reloaded
+
+# libvirtd, not virtnetworkd: this host runs the MONOLITHIC daemon (libvirt
+# 12.0.0, virtnetworkd inactive, verified 2026-08-31). On a modular install
+# the network hook is run by virtnetworkd instead and this would restart the
+# wrong unit — silently, since the restart succeeds and the hook simply never
+# fires. Check `systemctl is-active virtnetworkd` before reusing this role on
+# a host that is not machine 1.
+#
+# Safe to restart with the VM running: qemu processes are not children of
+# libvirtd and running networks are left up.
+- name: restart libvirtd
+  ansible.builtin.systemd_service:
+    name: libvirtd
+    state: restarted

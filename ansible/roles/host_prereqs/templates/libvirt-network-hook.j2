@@ -1,0 +1,86 @@
+#!/bin/sh
+# MANAGED BY ANSIBLE (host_prereqs) — edits on the host are overwritten.
+#
+# Reopens one port of the Talos VM to the tailnet, which libvirt otherwise
+# rejects by design.
+#
+# TEMPORARY — DELETE THIS FILE AT THE D20 BARE-METAL TALOS MOVE (LES-172).
+# It exists only because the Talos node sits behind this host's libvirt NAT.
+# On bare metal there is no libvirt network, no NAT to punch through and no
+# host to route via: the node has its own tailnet-reachable address, and this
+# hook, the subnet-router advertisement, and the autoApprovers.routes entry in
+# tailscale-acl/policy.hujson all go with it. Removing them is part of that
+# migration rather than follow-up work. The ACL *grant* is the part that
+# survives — see LES-136 for the full record and for why the durable answer is
+# a Tailscale system extension on the node instead of this.
+#
+# THE PROBLEM. Machine 1 advertises 10.10.0.0/24 as a Tailscale subnet router
+# so `talosctl` works from the operator's devices instead of only from this
+# host's own shell. Routing is not enough: libvirt's NAT network forwards only
+# RELATED,ESTABLISHED traffic INTO the guest and REJECTs everything else —
+#
+#   LIBVIRT_FWI  ACCEPT  -> {{ libvirt_talos_network_bridge }}  10.10.0.0/24  ctstate RELATED,ESTABLISHED
+#   LIBVIRT_FWI  REJECT  -> {{ libvirt_talos_network_bridge }}  0.0.0.0/0     reject-with icmp-port-unreachable
+#
+# so a new inbound connection dies on that REJECT. It surfaces as
+# "connection refused" from `nc` and `dial tcp ...: connect: connection
+# refused` from talosctl, which reads like apid being down rather than a
+# firewall decision — apid is listening the whole time and answers fine from
+# this host.
+#
+# WHY NOT ufw. LIBVIRT_FWI is jumped from FORWARD at position 2, ahead of
+# ts-forward and all nine ufw-* chains, which carry zero packets for this
+# traffic. A `ufw route allow` rule is inert here. Same preemption the
+# dnsmasq rules in this role's tasks already note, in the FORWARD direction.
+#
+# WHY A HOOK RATHER THAN A PERSISTED RULE. libvirt re-inserts its own jumps at
+# the HEAD of FORWARD every time a network starts, so anything placed at
+# position 1 is pushed below the REJECT on the next boot or `virsh net-start`.
+# It then fails silently and identically to never having been configured. A
+# hook runs after libvirt has rebuilt its chains, which is the only ordering
+# that stays correct.
+#
+# The operation MUST be "started", not "start": on "start" libvirt has not yet
+# installed its chains, so our rule would be inserted first and then buried.
+# "start" is also the phase where a non-zero exit ABORTS the network — one
+# reason this script exits 0 no matter what.
+#
+# Only the inbound direction is needed: LIBVIRT_FWO already accepts everything
+# from 10.10.0.0/24 outbound, so replies are covered. No SNAT either — the
+# guest's default route is this host, which routes back over the tailnet.
+#
+# libvirt hook contract: $1 network name, $2 operation, $3 sub-operation.
+set -u
+
+NETWORK="$1"
+OP="$2"
+
+# Other libvirt networks (notably 'default') must be left entirely alone.
+[ "$NETWORK" = "{{ libvirt_talos_network_name }}" ] || exit 0
+
+# Deliberately unquoted at every use below so the shell word-splits it into
+# arguments. Kept on one line for that reason — do not wrap it.
+RULE="FORWARD -i {{ talos_api_ingress_interface }} -o {{ libvirt_talos_network_bridge }} -d {{ talos_cp_ip }} -p tcp --dport {{ talos_api_port }} -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT"
+
+case "$OP" in
+    started)
+        # -C first: this runs on every network start and on every Ansible
+        # converge, and a bare -I would stack a duplicate rule each time.
+        # shellcheck disable=SC2086
+        iptables -C $RULE 2>/dev/null || iptables -I $RULE
+        ;;
+    stopped)
+        # Leave no rule pointing at a bridge that no longer exists. Looped
+        # because a converge may have inserted a duplicate before this script
+        # owned the rule.
+        # shellcheck disable=SC2086
+        while iptables -C $RULE 2>/dev/null; do
+            iptables -D $RULE || break
+        done
+        ;;
+esac
+
+# ALWAYS succeed. A hook that exits non-zero on "start" prevents the network
+# from starting at all — which would turn a firewall problem into a host that
+# boots without its VM network, and a cluster that does not come back.
+exit 0
