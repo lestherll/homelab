@@ -87,3 +87,24 @@ talos_cp_ip: 10.10.0.10
 # the key the DHCP reservation above matches on, so Terraform sets this exact
 # value on the domain's interface.
 talos_cp_mac: "52:54:00:7a:10:5e"
+
+# --- Talos machine API, reachable from the tailnet (LES-162) ----------------
+#
+# The libvirt network above is host-only by design, which is what makes
+# `talosctl` work from this host and nowhere else. Machine 1 advertises
+# 10.10.0.0/24 as a Tailscale subnet router to fix that, and these settle the
+# single hole punched through libvirt's NAT rejection to make it usable. The
+# mechanism, and why a hook rather than a persisted rule, is in
+# templates/libvirt-network-hook.j2.
+#
+# ONE PORT, DELIBERATELY. The tailnet ACL scopes its grant to tcp:50000 for a
+# reason that applies here too: the VM also serves node-exporter on :9100 with
+# no authentication at all (hostNetwork, privileged observability namespace).
+# Two independent layers now have to be widened before that endpoint is
+# exposed, and neither should be widened casually. apid itself is mutual TLS
+# against the Talos PKI, so opening this port grants reachability, not access.
+talos_api_port: 50000
+# The interface tailnet traffic arrives on. Falls back rather than requiring
+# the inventory var, so the role stays runnable against a host that has not
+# been given one.
+talos_api_ingress_interface: "{{ tailscale_interface | default('tailscale0') }}"
