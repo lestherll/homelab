@@ -36,17 +36,39 @@
     // through `tag:k8s` instead, which is stable by construction. The host's
     // address is stable because the machine is long-lived — and if it ever does
     // change, this fails loudly rather than silently testing nothing.
+    // talos-cp-01 is the Talos VM's address on machine 1's host-only libvirt
+    // network. Unlike a proxy IP this one is safe to pin: it is set explicitly
+    // as `node_ip` in terraform/clusters/homelab, not handed out by DHCP, so it
+    // changes only when someone edits Terraform.
+    //
+    // It is NOT reachable by virtue of appearing here — a named host is just a
+    // label. Reachability comes from machine 1 advertising 10.10.0.0/24 as a
+    // subnet router plus the grant below, and from nothing else.
     "hosts": {
-        "homelab": "100.121.11.84",
+        "homelab":     "100.121.11.84",
+        "talos-cp-01": "10.10.0.10",
     },
 
     // Let the operator's proxies advertise the apiserver service without a
     // human approving each one in the console. Scoped to the one service by
     // name rather than "svc:*" — a wildcard here would let any tag:k8s proxy
     // claim any service name it liked, including one a future rule trusts.
+    //
+    // The route entry lets machine 1 advertise the Talos VM's host-only libvirt
+    // network without a console click, so `talosctl` works from the operator's
+    // devices instead of only from machine 1's own shell (LES-162). Scoped to
+    // the exact /24, never 0.0.0.0/0: a wider entry would let that machine
+    // auto-approve itself as an exit node.
+    //
+    // Approving a ROUTE is not granting access to it. Nothing on 10.10.0.0/24
+    // is reachable until the grant below names it, which is why this file can
+    // advertise a whole subnet and still expose exactly one port.
     "autoApprovers": {
         "services": {
             "svc:kube-apiserver-ci": ["tag:k8s"],
+        },
+        "routes": {
+            "10.10.0.0/24": ["lestherll@github"],
         },
     },
 
@@ -118,6 +140,41 @@
         // AuthenticationConfiguration does the identity check, and RBAC
         // (infrastructure/human-auth/) does the authorization.
         {"src": ["autogroup:member"], "dst": ["svc:kube-apiserver-ci"], "ip": ["tcp:443"]},
+
+        // The operator reaching the Talos machine API over the subnet route
+        // machine 1 advertises (LES-162; the reachability half of LES-136).
+        //
+        // THE PORT LIST IS THE SECURITY BOUNDARY HERE, not the route. Routing
+        // 10.10.0.0/24 onto the tailnet puts the VM's whole listening surface
+        // one grant away, and it is not all authenticated. Audited 2026-08-31
+        // from machine 1:
+        //
+        //   50000 apid          mTLS, Talos CA — no cert, no handshake
+        //   50001 trustd        mTLS
+        //    6443 apiserver     401 anonymous
+        //    2379/2380 etcd     mTLS, etcd CA
+        //   10250 kubelet       webhook authn, anonymous disabled
+        //    9100 node-exporter *** HTTP 200, NO AUTH ***  <- the reason for tcp:
+        //   10256 kube-proxy    unauthenticated
+        //
+        // node-exporter runs hostNetwork in the privileged observability
+        // namespace and will hand its whole metric set to anyone who can reach
+        // it. So this grant names tcp:50000 and nothing else. Widening it to
+        // ["*"] for convenience silently publishes that endpoint to every
+        // device on the tailnet — do not, and if a second port is ever needed,
+        // add that port rather than the wildcard.
+        //
+        // Also expect 10249 (kube-proxy metrics) to open on the next REBUILD:
+        // talos.tf sets metrics-bind-address=0.0.0.0 and justifies it with
+        // "10.10.0.10 is ... not reachable from the LAN", which this rule is
+        // the beginning of the end of. It is still closed today only because
+        // bootstrap manifests do not retrofit a running cluster.
+        //
+        // src is autogroup:member rather than the Mac alone because an ACL src
+        // cannot name a single device; on a single-user tailnet this is the
+        // operator's own devices. Reachability is only half of access anyway —
+        // apid still demands a client cert per device (LES-156).
+        {"src": ["autogroup:member"], "dst": ["talos-cp-01"], "ip": ["tcp:50000"]},
 
         // Allow users in "group:example" to access "tag:example", but only from
         // devices that are running macOS and have enabled Tailscale client auto-updating.
@@ -219,6 +276,39 @@
         {
             "src":  "tag:ci",
             "deny": ["tag:k8s:443", "tag:k8s:80", "tag:k8s-operator:443", "homelab:22"],
+        },
+
+        // The Talos machine API over the subnet route, and — the half that
+        // matters — everything else on that VM staying shut.
+        //
+        // 9100 is node-exporter, which answers HTTP 200 with no authentication
+        // whatsoever; if that deny ever starts failing, the grant has been
+        // widened and the VM's full metric set is on the tailnet. 6443, 2379
+        // and 10250 are authenticated, so reaching them is not immediately a
+        // breach — they are here because reachability beyond one port means the
+        // port list was replaced by a wildcard, which is the actual mistake to
+        // catch. 22 is included though Talos runs no SSH at all: it asserts the
+        // rule is scoped to a port rather than to the host.
+        {
+            "src":    "lestherll@github",
+            "accept": ["talos-cp-01:50000"],
+            "deny": [
+                "talos-cp-01:9100",
+                "talos-cp-01:10256",
+                "talos-cp-01:6443",
+                "talos-cp-01:2379",
+                "talos-cp-01:10250",
+                "talos-cp-01:22",
+            ],
+        },
+
+        // CI has no business on the machine API — it registers Flux objects
+        // through the apiserver service and nothing else. Without this, a
+        // future widening of the grant above from autogroup:member to a tag
+        // would hand an app repo's runner node-level access.
+        {
+            "src":  "tag:ci",
+            "deny": ["talos-cp-01:50000", "talos-cp-01:9100"],
         },
     ],
 }
