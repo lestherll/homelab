@@ -321,6 +321,14 @@ the fleet ever grows — a mistagged disk puts `fast` replicas on the HDD, silen
 Assumes three machines broadly like machine 1 (8 cores, 15Gi) — **verify before
 committing**, because Longhorn replica placement wants comparable disk sizes.
 
+> **Verified, and it does not hold** — `docs/fleet/hardware-fit-notes.md`.
+> Machine 2 is a ThinkCentre M710e with **3.2Gi and one disk**, not 15Gi and two.
+> Fleet RAM is 18.2Gi across two machines, not 45Gi across three, and the
+> ~2.9Gi per-machine floor (Talos+kubelet, etcd, Cilium, Longhorn) consumes ~90%
+> of machine 2 before any workload. The `bulk` tier cannot reach its 2 replicas
+> either: the fleet contains exactly one HDD. Both are fixed by parts — RAM and a
+> 3.5" drive, into bays that are already free — not by redesign.
+
 | | RAM |
 | --- | --- |
 | Talos + kubelet (×3) | ~3Gi |
