@@ -160,6 +160,15 @@ is Kubernetes CRDs — hardware, templates and workflows — and the workflow ac
 are arbitrary container images. So it needs nothing but a machine that
 network-boots, and it composes with Flux rather than competing with it.
 
+> **Confirmed and narrowed by `docs/fleet/tinkerbell-investigation.md`.** All of
+> this holds, and Tinkerbell is the only system here that also passes the Talos
+> config-delivery test that killed Metal3 (`Hardware.spec…osie.kernelParams` is
+> an arbitrary kernel command line, which is exactly what `talos.config=` needs).
+> Two narrowings: the workflow engine and HookOS are **not** needed for Talos,
+> which installs itself, so the useful surface is Smee + the `Hardware` CRD; and
+> **Tinkerbell + Cluster API is worse than either half** — CAPT hard-requires
+> cloud-init with an EC2 datasource and has no Talos support.
+
 **Omni** — covered in the ADR's §8.3; belongs on this axis as the Talos-native
 option that replaces planes 1–3 with SideroLink and cluster templates.
 
@@ -284,6 +293,13 @@ Plane 4 is the column that matters; plane 1 is the column that costs money.
 3. **Netboot: start with the schematic and iPXE** (§8.4). Reach for Tinkerbell
    only when "reinstall a machine I can't reach" becomes recurring — it is CRDs,
    so it joins Flux rather than displacing it.
+   > **Wrong trigger**, per `docs/fleet/tinkerbell-investigation.md` §7:
+   > Tinkerbell without a BMC cannot reinstall an unreachable machine either — it
+   > changes what a machine boots *next time it boots*, and something else still
+   > has to power-cycle it. The real trigger is "per-machine boot config in git,
+   > and machines that enrol themselves". Remote power is a separate hardware
+   > purchase — or free, if the machines turn out to have Intel vPro/AMT, which
+   > Rufio supports natively and nothing here had considered.
 4. **Don't build plane 4 for machines.** At N=3, the pod scheduler already is
    plane 4 for everything including KubeVirt VMs, which are scheduled by the same
    scheduler. This is the part D20 gets for free and that Proxmox, Incus and MAAS
