@@ -127,6 +127,12 @@ discussion applies to them.** That is worth ten minutes with a spec sheet before
 buying anything — it is the cheapest possible outcome of this whole line of
 research, and neither the ADR nor the survey considered it.
 
+> **Checked, and the answer is no** — `docs/fleet/hardware-fit-notes.md` §2. The
+> ThinkCentre M710e is an **Intel B250** board, and in the 200-series only Q270
+> carries vPro; the Dell is a consumer Inspiron. Neither machine has AMT and
+> neither can gain it. The branch stays open only for a future machine bought
+> with a Q-series chipset.
+
 ## 3. Test 2 — Talos config delivery: passes, decisively
 
 This is the test Metal³ failed. Metal³ has exactly one config channel — a
