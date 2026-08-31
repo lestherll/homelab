@@ -131,6 +131,13 @@ remote power and recovery — the one capability that makes a metal layer worth
 operating at all. You would carry Ironic's weight and keep walking to the
 machine.
 
+> **Corrected by `docs/fleet/metal3-investigation.md`.** `manual-management` is
+> an *Ironic* hardware type, and Metal3 never exposes it: `BareMetalHost`
+> addresses a node only through a closed list of IPMI/Redfish drivers, and a host
+> created without BMC details is parked in `unmanaged`, which it cannot leave. So
+> the softer framing here is too generous — it is not that Metal3-without-a-BMC
+> gives up remote power, it is that it does not run.
+
 **MAAS — the trick worth stealing.** MAAS has a `Manual` power driver with the
 obvious limitation, but it also has a **webhook power driver**, which *"allows
 you to talk to a device without a BMC and send it power on, power off, or status

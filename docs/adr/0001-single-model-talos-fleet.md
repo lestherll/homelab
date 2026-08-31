@@ -369,6 +369,16 @@ do not have. It also needs a management cluster to run in, which is a bootstrap
 circularity, and it is a great deal of machinery for three machines. Revisit at
 ~10 machines; the all-Talos base makes adopting it easy later.
 
+> **Superseded in its details by `docs/fleet/metal3-investigation.md`.** Two of
+> those three reasons need correcting. The BMC one is *stronger* than stated —
+> BMO's driver list is closed, so Metal3 without a BMC does not run at all —
+> and it is joined by a second blocker this paragraph missed: Metal3 configures
+> machines through a cloud-init/Ignition config drive, which Talos does not read.
+> The bootstrap circularity, however, is **wrong**: Metal3 implements
+> `clusterctl move`, so it pivots onto the fleet it manages. And the revisit
+> trigger should be a hardware refresh that brings a real BMC, **not** ~10
+> machines — ten mini-PCs are as un-provisionable as three.
+
 **Omni (Sidero Labs).** The Talos-native fleet manager: token-based machine
 registration, SideroLink WireGuard mesh, cluster templates, a Terraform provider.
 Closest thing to the described target, and worth a real look. Not chosen for the
