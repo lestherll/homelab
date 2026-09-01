@@ -4,6 +4,17 @@
 Implements `docs/adr/0001-single-model-talos-fleet.md`; read that for *why*, this
 for *what*.
 
+> **Scope, in the layers of `docs/fleet/golden-architecture.md`:** this document
+> is the detailed build-out of the **Fleet** and **Infrastructure** layers. The
+> Platform API layer is out of scope here — what D20 does to it is priced
+> separately in `platform-api-under-d20.md`, and the fact that it needs a
+> separate, short document is the point.
+>
+> Section headings name the layer they belong to. This replaces an earlier
+> `L0`–`L6` notation that was never defined, skipped `L5`, and collided with OSI
+> layer names. One `L2` survives, in §4, where it genuinely means OSI — a VIP is
+> an L2 address. That is the only remaining L-number in this file.
+
 Three decisions fix the shape, and everything below follows from them:
 
 | Decision | Value | Consequence |
@@ -78,7 +89,7 @@ fast-unreplicated Longhorn/SSD  1          PLATFORM-INTERNAL, see §5.2
 
 ---
 
-## 2. Machines and boot (L0)
+## 2. Machines and boot (Fleet)
 
 - **Power:** a smart plug per machine, exposed to whatever provisioning tool is
   in use. Consumer mini-PCs have no BMC; this is the substitute, and it is the
@@ -93,7 +104,7 @@ fast-unreplicated Longhorn/SSD  1          PLATFORM-INTERNAL, see §5.2
   (Longhorn), the Tailscale extension, `qemu-guest-agent` is dropped — there is
   no hypervisor left.
 
-## 3. OS and cluster (L1–L2)
+## 3. OS and cluster (Fleet → Infrastructure)
 
 - Talos on bare metal, MPL-2.0, no SSH and no shell. Machines are cattle.
 - **3 control planes**, etcd quorum 3, `allowSchedulingOnControlPlanes: true`.
@@ -111,7 +122,7 @@ fast-unreplicated Longhorn/SSD  1          PLATFORM-INTERNAL, see §5.2
   Longhorn and pod anti-affinity have a failure domain to spread across. Without
   these, "3 replicas" can legally mean 3 copies on one machine.
 
-## 4. Network (L3)
+## 4. Network (Infrastructure)
 
 - **Bridged**, so nodes and KubeVirt VMs sit directly on the LAN.
 - **Cilium in CNI-chaining mode** over Flannel, as today — it exists to make
@@ -129,7 +140,7 @@ fast-unreplicated Longhorn/SSD  1          PLATFORM-INTERNAL, see §5.2
   `tag:k8s-operator-<cluster>`, set before the first proxy device exists — tags
   are immutable afterwards, and recreating an exposure burns its certificate.
 
-## 5. Storage (L4)
+## 5. Storage (Infrastructure)
 
 Longhorn, chosen because Ceph cannot consume a formatted path. Disk tags map the
 existing two-disk layout onto one install: SSD tagged `fast`, HDD tagged `bulk`.
@@ -181,7 +192,7 @@ in `Application.spec.persistence.tier`.
 > The alternative — RWX via Longhorn's NFS share-manager — is a second storage
 > mode and a new failure surface for a case no app here has.
 
-## 6. Non-prod (L6)
+## 6. Non-prod (Infrastructure)
 
 A single-node Talos cluster running as a KubeVirt VM on the fleet.
 
@@ -354,7 +365,10 @@ Rules that must hold. Each one is cheap to keep and expensive to retrofit.
    generous on day one.
 2. **No hardcoded node names**, anywhere.
 3. **Storage classes name guarantees, not implementations.** `scratch`/`fast`/
-   `bulk` are a public contract; how they are backed is not.
+   `bulk` are a public contract; how they are backed is not. This is
+   `golden-architecture.md` §3's invariant — *a layer's contract is expressed in
+   terms that do not name the layer below* — stated for storage, and it is the
+   exemplar that document cites.
 4. **Replicate at exactly one layer per workload**, and write down which.
 5. **`replicas > 1` and `persistence` are mutually exclusive** in the
    `Application` API, enforced at admission.

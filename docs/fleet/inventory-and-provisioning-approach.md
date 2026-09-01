@@ -24,7 +24,10 @@ need something *outside* the target cluster (Ironic, or Smee) to act on bare
 metal at all, and why both were found to cost more than they return here.
 
 So the three wants do not have one answer — they split by whether the machine is
-a cluster member yet:
+a cluster member yet. **That split is the Fleet → Infrastructure boundary in
+`docs/fleet/golden-architecture.md`**, met from below: everything left of it is
+Fleet-layer and cannot be reconciled; everything right of it is Infrastructure
+and can.
 
 | Want | Before the machine joins | After it joins |
 | --- | --- | --- |
