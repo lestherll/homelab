@@ -176,6 +176,13 @@ LATER    ├─ machine 3, matched to machine 2  ideally a Q-series chipset
          └─ Tinkerbell + netboot ─────────── §4, when reinstalls get routine
 ```
 
+> **What Fleet-layer automation is still worth building once manual install is
+> accepted** — which is most of it, since netboot is step 2 of the nine in
+> `target-architecture.md` §9.1 — is worked through in
+> `docs/fleet/provisioning-automation-without-netboot.md`. Short version: config
+> generation and the post-join labelling are the recurring work and survive the
+> arrival of netboot unchanged.
+
 **The first line is the point of this note.** NFD depends on nothing else here,
 costs one HelmRelease, and turns "I should really write down what these machines
 are" into something the cluster maintains for you. Everything below it is already
