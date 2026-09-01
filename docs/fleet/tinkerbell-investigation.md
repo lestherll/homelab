@@ -132,6 +132,12 @@ research, and neither the ADR nor the survey considered it.
 > carries vPro; the Dell is a consumer Inspiron. Neither machine has AMT and
 > neither can gain it. The branch stays open only for a future machine bought
 > with a Q-series chipset.
+>
+> **This matters less than it first appeared**, because out-of-band power does
+> not require out-of-band *hardware* here: Rufio's `rpc` and `homeassistant`
+> providers drive an ordinary smart plug, and a power-only task is legal. AMT
+> would be free and better; a plug is cheap and sufficient. See
+> `docs/fleet/smart-plug-power-control.md`.
 
 ## 3. Test 2 — Talos config delivery: passes, decisively
 
@@ -286,17 +292,31 @@ provider.
 **Tinkerbell without a BMC cannot reinstall a machine you can't reach either.** It
 can change what that machine boots *the next time it boots*, which is genuinely
 useful, but something still has to power-cycle it. With no BMC that something is a
-human or a smart plug — and Rufio speaks Redfish/IPMI/AMT, not smart plugs, so the
-plug stays outside Tinkerbell's control loop exactly as it does today.
+human or a smart plug.
+
+> **Corrected 2026-09-01.** This paragraph continued: *"and Rufio speaks
+> Redfish/IPMI/AMT, not smart plugs, so the plug stays outside Tinkerbell's
+> control loop exactly as it does today."* **That was wrong** — read off the
+> `ProviderName` enum rather than the providers Rufio wires up. Rufio also ships
+> bmclib's **`rpc`** (generic HMAC-signed webhook) and **`homeassistant`**
+> providers, both first-class on the `Machine` CRD, and a power-only BMC task is
+> a supported shape. A smart plug **is** drivable from inside Tinkerbell's
+> control loop, with a small shim and no BMC emulation. See
+> `docs/fleet/smart-plug-power-control.md`. The split below still stands; what
+> changes is that its second half now has a buildable answer for desktop
+> machines rather than none.
 
 The trigger should therefore be split, because it is really two capabilities:
 
 - **"I want per-machine boot config in git, and machines to enrol themselves."**
   Tinkerbell delivers this now, with no BMC. This is the real reason to adopt it.
-- **"I want to power-cycle and reinstall without walking over."** Needs
-  out-of-band hardware first: AMT if the machines have vPro (free, check §2), a
-  smart plug otherwise (outside Tinkerbell), or a real BMC (a hardware refresh,
-  which is also the Metal³ trigger).
+- **"I want to power-cycle and reinstall without walking over."** Needs a power
+  interface, which for a *desktop* machine is cheap and fully inside Tinkerbell:
+  a smart plug driven by Rufio's `rpc` webhook provider plus a small shim
+  (`docs/fleet/smart-plug-power-control.md`), or AMT for free if a machine has
+  vPro (§2), or a real BMC on a hardware refresh — which is also the Metal³
+  trigger. **For machine 1 none of these work**, because it is a laptop; that is
+  a hardware problem, not a software one.
 
 ## 8. Costs and frictions, for the record
 

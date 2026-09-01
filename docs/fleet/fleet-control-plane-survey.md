@@ -293,12 +293,19 @@ Plane 4 is the column that matters; plane 1 is the column that costs money.
    system above is either gated on it or materially better with it. It is also
    the difference between "machine 2 is wedged" being a walk and being a curl.
    Nothing in this repo depends on which one, so there is no decision to defer.
-   > **Half wrong, per `docs/fleet/hardware-fit-notes.md` §3.** Machine 1 is a
-   > *laptop*. A smart plug cuts its charger, not its power — it cannot
-   > power-cycle a machine with a charged battery, and laptops generally lack the
-   > "restore on AC loss" firmware setting desktops have. Buy one for machine 2,
-   > not one per machine. The same battery is also an unrecorded asset: machine 1
-   > rides out a mains cut, which §8's failure matrix says nothing about.
+   > **One caveat, and one earlier correction withdrawn.**
+   > *Caveat* (`docs/fleet/hardware-fit-notes.md` §3): machine 1 is a **laptop**.
+   > A smart plug cuts its charger, not its power — it cannot power-cycle a
+   > machine with a charged battery, and laptops generally lack the "restore on
+   > AC loss" firmware setting desktops have. Buy one for machine 2, not one per
+   > machine. That battery is also an unrecorded asset: machine 1 rides out a
+   > mains cut, which §8's failure matrix says nothing about.
+   > *Withdrawn*: this block previously added that the plug would sit outside
+   > Tinkerbell's control loop because Rufio speaks only Redfish/IPMI/AMT. Wrong
+   > — Rufio ships bmclib's `rpc` and `homeassistant` providers and accepts
+   > power-only tasks (`docs/fleet/smart-plug-power-control.md`). **The advice
+   > above was closer to right than that correction made it sound**, for every
+   > machine that is not a laptop.
 2. **Leave plane 5 where it already is.** The apiserver is the one endpoint. That
    is D20's actual claim and the survey supports it.
 3. **Netboot: start with the schematic and iPXE** (§8.4). Reach for Tinkerbell

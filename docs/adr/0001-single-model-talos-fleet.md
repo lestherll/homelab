@@ -675,6 +675,15 @@ AMT (machine 2 is a B250 board; only Q270 carries vPro in that generation), and
 charger, not the power. So "a smart plug per machine" is wrong for half this
 fleet. Buy one for machine 2; machine 1 needs different hardware or nothing.
 
+**For machines 2 and later the software half is already solved**, which was not
+clear when this was written: Rufio ships bmclib's `rpc` (HMAC-signed webhook) and
+`homeassistant` providers, and a power-only BMC task is a supported shape, so an
+ordinary smart plug is drivable from inside Tinkerbell with a small shim and no
+BMC emulation. That makes remote power a ~£30 purchase plus a hundred lines,
+rather than the hardware-refresh-or-nothing this paragraph implied. Still
+deferred, not solved — but deferred by choice now. See
+`docs/fleet/smart-plug-power-control.md`.
+
 ### 8.5 Does Ansible survive for non-cluster machines? — **STILL OPEN**, but narrower.
 
 Unchanged, and genuinely a judgement call rather than a research question: it
