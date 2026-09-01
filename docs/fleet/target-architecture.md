@@ -334,6 +334,15 @@ Three things worth understanding about that sequence:
 Step 7 is the only genuinely manual one, and it is the one to automate first if
 the fleet ever grows — a mistagged disk puts `fast` replicas on the HDD, silently.
 
+> **There is now a mechanism for it, and for step 8**, needing no netboot and no
+> new component: NFD rules can write **annotations** as well as labels, and
+> Longhorn parses a `node.longhorn.io/default-disks-config` annotation — including
+> per-disk `tags` — on nodes labelled `node.longhorn.io/create-default-disk: config`.
+> Keyed on the `rotational` flag NFD discovers, one rule covers machines with both
+> tiers and another covers SSD-only machines. See
+> `docs/fleet/provisioning-automation-without-netboot.md` §3.2, including the
+> limit that Longhorn applies the annotation only while the node has no disks yet.
+
 ## 10. Rough capacity budget
 
 Assumes three machines broadly like machine 1 (8 cores, 15Gi) — **verify before
