@@ -205,7 +205,13 @@ same plan, which is a good sign it is the right one.**
 2. **A 3.5" HDD for machine 2**, if `bulk` is to be replicated at all (§5). The
    bay is free.
 3. **A smart plug for machine 2 only**, if remote power is wanted later. It does
-   not work on machine 1 (§3), so buy one, not "one per machine".
+   not work on machine 1 (§3), so buy one, not "one per machine". A per-outlet
+   strip such as the Tapo P304M covers machines 2–4 from one device, and
+   **Tinkerbell can drive it natively** — Rufio's `rpc` webhook provider plus a
+   small shim, no BMC emulation — so the purchase is not stranded on future
+   software work. Its per-outlet energy monitoring is also a real power source
+   for the dark `node_rapl_*` panels (LES-97). See
+   `docs/fleet/smart-plug-power-control.md`.
 4. **Machine 3, matched to machine 2**, when quorum is wanted. An SFF desktop of
    the same class, ideally with a **Q-series chipset** so the fleet finally gains
    out-of-band management and the Metal³/Tinkerbell BMC branches reopen (§2).
