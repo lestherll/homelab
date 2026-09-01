@@ -48,6 +48,22 @@ D20
 
 The same change in layering notation is in the Decision section below.
 
+**Where this decision sits.** The system is three layers, described in
+`docs/fleet/golden-architecture.md`:
+
+```
+  PLATFORM API     Database · ObjectStorage · Application    ← the product
+  INFRASTRUCTURE   Cilium · storage · Tailscale · CNPG · …
+  FLEET            machines · power · boot · OS · config
+```
+
+**D20 is a Fleet and Infrastructure decision.** Its whole justification is that
+the Platform API — the layer the project exists to produce — barely notices. That
+is the test §10 applies. D18 passed the same test for a change one layer
+higher (k3s → Talos, entirely inside Infrastructure); D20 is the deeper case. Do not
+confuse these with D1's "Layer 0/1/2", which is the *thickness* of the Platform
+API layer and sits inside the top box.
+
 **The plan.**
 
 ```
@@ -85,7 +101,8 @@ rebuild later. So they are spent together, once.
 | Per-cluster Tailscale tags | **Yes**, one Helm value (§8.2) — but the *operator* tag must split too, or the control is decorative |
 | Omni | **Not needed** (§8.3, `talos-without-omni.md`). Licensing is fine; the gap it fills is empty at N=3 |
 | Multi-arch | **Already true** (§8.6). Every image in the tree is amd64 + arm64 |
-| Netboot mechanism | Open (§8.4). Schematic + iPXE first; Tinkerbell only if "reinstall a machine I can't reach" recurs |
+| Netboot mechanism | **Staged** (§8.4). USB now; plain iPXE when netboot is wanted; Tinkerbell (Smee + `Hardware`) when a hand-maintained iPXE config is the thing going wrong |
+| Remote power | **Open, and now a hardware question** (§8.4). No machine has a BMC or AMT, and a smart plug cannot power-cycle machine 1 — it is a laptop |
 | Ansible for non-cluster machines | Open (§8.5). A judgement call, not a research question |
 
 **Two alternatives worth holding in mind** (§7, `fleet-control-plane-survey.md`):
@@ -127,6 +144,23 @@ after:
 Terraform → declare cluster shape, against ONE endpoint
 Talos     → provide immutable Kubernetes nodes, on the metal
 Flux      → reconcile Kubernetes state, including KubeVirt VMs
+```
+
+The same thing in the named layers of `docs/fleet/golden-architecture.md`, which
+is what makes the scope of this decision legible — **two layers move, one does
+not**:
+
+```
+                  BEFORE                      AFTER
+  ─────────────────────────────────────────────────────────────────
+  PLATFORM API    kro RGDs                    kro RGDs
+                  (spec surface nearly unchanged — §10)
+
+  INFRASTRUCTURE  Flux over a VM's cluster    Flux over the fleet's
+                                              cluster, + KubeVirt
+
+  FLEET           Ansible builds hypervisors  netboot/USB + Terraform
+                  Terraform per libvirtd      against ONE endpoint
 ```
 
 **This is not a reversal of D18 — it is D18's recorded reversal trigger firing.**
@@ -417,6 +451,16 @@ hand is not reinvention — it is the only way to get the architecture onto this
 machine. And the re-evaluation trigger is a **hardware refresh, not a machine
 count**, because Harvester would collapse this whole decision into an install.
 
+**Tinkerbell + Cluster API.** Investigated 2026-08-31 and rejected as a pairing,
+which is the interesting part: *bare* Tinkerbell passes both tests Metal3 failed
+(boot control is opt-in, and `Hardware.spec…osie.kernelParams` is an arbitrary
+kernel command line, which is exactly the `talos.config=` channel Talos needs).
+**Adding Cluster API breaks it again.** CAPT expects the provisioned OS to run
+cloud-init with an EC2 metadata datasource, publishes Ubuntu images, and mentions
+Talos nowhere — so it reimports the blocker that disqualified Metal3, to manage
+one cluster Terraform already manages. Adopt Tinkerbell, if at all, as Smee plus
+the `Hardware` CRD. Full analysis in `docs/fleet/tinkerbell-investigation.md`.
+
 ## 8. Open questions
 
 Four of the six were resolved on 2026-08-30 against the live chart values, the
@@ -584,7 +628,7 @@ without a second look at the ~10-machine trigger. Recommendation unchanged: revi
 Metal3/Ironic at the ~10-machine trigger §7 already names, and keep the all-Talos
 base that makes either adoptable then.
 
-### 8.4 Netboot mechanism — **STILL OPEN**, but no longer independent.
+### 8.4 Netboot mechanism — **RESOLVED: staged.** Power stays open.
 
 Unchanged in stakes: a Talos machine joined by config is identical regardless of
 how the config arrived, so the mechanism stays swappable. What §8.1 adds is that
@@ -601,12 +645,43 @@ is not software: a smart plug per machine is a power interface for consumer
 hardware that has no BMC, and MAAS's webhook power driver is the existing proof
 that the pattern works.
 
-### 8.5 Does Ansible survive for non-cluster machines? — **STILL OPEN.**
+**Resolved 2026-08-31, into three stages rather than one choice** — see
+`docs/fleet/inventory-and-provisioning-approach.md`:
+
+1. **USB install, now.** Netboot is deferred; machines 1–3 are installed from a
+   stick per `docs/fleet/headless-talos-install.md`. At N=2 this is not a
+   compromise, it is the cheaper correct answer.
+2. **Plain iPXE + DHCP `next-server`, when netboot is wanted.** Unchanged from
+   the option above; the artifact is still §8.1's schematic.
+3. **Tinkerbell as Smee + the `Hardware` CRD, when a hand-maintained iPXE config
+   becomes the thing going wrong.** Not the workflow engine — Talos installs
+   itself — and not with Cluster API (§7). `Hardware` objects describe machines
+   that already exist, so a fleet installed from USB adopts into Tinkerbell later
+   without reinstalling anything: arriving late costs nothing.
+
+**The power half of this question stays open, and is now a hardware question
+rather than a software one.** Two corrections to the paragraph above, both from
+`docs/fleet/hardware-fit-notes.md`: no machine in this fleet has a BMC *or* Intel
+AMT (machine 2 is a B250 board; only Q270 carries vPro in that generation), and
+**a smart plug does not power-cycle machine 1, which is a laptop** — it cuts the
+charger, not the power. So "a smart plug per machine" is wrong for half this
+fleet. Buy one for machine 2; machine 1 needs different hardware or nothing.
+
+### 8.5 Does Ansible survive for non-cluster machines? — **STILL OPEN**, but narrower.
 
 Unchanged, and genuinely a judgement call rather than a research question: it
 depends on whether a NAS or router ever exists here, which nothing in this repo
 currently answers. §3's position — that this decision does not answer it — is
 still the right one.
+
+**Narrowed 2026-08-31.** One motive for keeping Ansible was that something has to
+know what the machines *are*. For machines that are cluster members that is now
+answered without it — Node Feature Discovery reports hardware as node labels,
+reconciled, including the DMI identity and the rotational/non-rotational flag
+that the Longhorn disk tagging needs
+(`docs/fleet/inventory-and-provisioning-approach.md` §2). So this question
+shrinks to genuinely non-cluster machines, where the answer may simply be a
+git-tracked list rather than a configuration-management system.
 
 ### 8.6 Multi-arch discipline — **RESOLVED: already true. The work is a check, not a retrofit.**
 
@@ -675,8 +750,19 @@ Two things the audit turned up that are worth keeping:
   (`factory.talos.dev`, `discovery.talos.dev`); see
   `docs/fleet/talos-without-omni.md`.
 - **The one rebuild is real work**, and must land everything in §4.1 at once.
+- **The fleet this is designed for does not exist yet, and the machines that do
+  are mismatched.** Measured 2026-08-31 in `docs/fleet/hardware-fit-notes.md`:
+  machine 2 has **3.2Gi and one disk**, not the 15Gi and two that §10's capacity
+  table assumed, so fleet RAM is **18.2Gi across two machines rather than 45Gi
+  across three**. The ~2.9Gi per-machine floor for Talos, etcd, Cilium and
+  Longhorn takes roughly 90% of machine 2 as it stands, and the fleet holds
+  exactly one HDD, so `bulk` cannot reach the two replicas §5 specifies. None of
+  this is a design fault and all of it is answered by parts rather than
+  redesign — but it is a cost, it is in the unit that actually runs out, and the
+  RAM should land *before* the §4.1 rebuild, since that rebuild fixes machine 2's
+  role in a config.
 
-## 10. What does not change, which is the strongest evidence for it
+## 10. The layer-boundary test, which is the strongest evidence for it
 
 **Corrected 2026-08-30.** This originally read *"`infrastructure/` is untouched.
 Not one file."* False — six files change, one of them the public API. The claim
@@ -700,6 +786,27 @@ authors, and called that *"the strongest available evidence the self-service
 abstraction (D15) was drawn in the right place."* The same test passes again
 here, one layer deeper — with the correction above, which is that it passes on
 the *contract*, not on the file count.
+
+**This section has now made the same argument twice without naming what it is
+arguing about, so:** it is the **layer-boundary test** from
+`docs/fleet/golden-architecture.md`. A change at one layer is sound if the layer
+above it does not have to change. D18 passed it for Infrastructure → Platform
+API; D20 passes it again for Fleet → Infrastructure → Platform API.
+
+**And it has since passed a third time, more cleanly than either.** The four
+Fleet-layer investigations of 2026-08-31 — Metal3, Tinkerbell, Tinkerbell +
+Cluster API, and the fleet's real hardware — resolved without changing a single
+file in `infrastructure/` or `platform-api/`. Three whole provisioning systems
+were evaluated and rejected, and nothing above the Fleet layer could observe the
+exercise. That is what the boundary is for.
+
+**One caveat, recorded rather than smoothed over.** The hardware investigation
+did leak upward, and by two layers at once: the fleet holds one HDD, so `bulk`
+cannot reach the replica count §5 specifies, which is a *durability promise made
+to app authors* determined by a hardware fact that skipped Infrastructure
+entirely. `golden-architecture.md` §5 records it as the sharpest known leak in
+the design. A two-layer jump is the failure mode this architecture is least
+protected against, and nothing before now would have caught it.
 
 **Reverses if:** the fleet stays at one or two machines indefinitely, at which
 point the hypervisor model's familiarity outweighs a control plane it never grows

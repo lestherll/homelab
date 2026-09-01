@@ -10,6 +10,11 @@ narrower and still strong:
 
 > **The API's spec surface is nearly untouched; its implementation is not.**
 
+That sentence is the **Infrastructure → Platform API boundary**, priced. In the
+layering of `docs/fleet/golden-architecture.md`, this whole document is the
+record of what one layer's migration costs the layer above it — and every item
+below is either a leak across that boundary (§5 there) or proof there isn't one.
+
 App authors see **one visible change** — `Application.spec.host` gains a cluster
 suffix (§6 item 4) — and **one semantic change** — `persistence.size` stops being
 documentation and becomes a real limit, because a Longhorn PVC is a real block

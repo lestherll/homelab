@@ -20,6 +20,11 @@ Every system surveyed here decomposes into the same five planes. The ones that
 feel like a cloud implement all five; the ones that don't are almost always
 missing plane 4.
 
+> **These five planes decompose the Fleet layer**, one level below
+> `docs/fleet/golden-architecture.md`'s three. They are not a competing scheme:
+> everything on this page is Fleet-layer work, which is precisely why none of it
+> reaches `infrastructure/` or the platform API.
+
 1. **Power and boot** — turn a machine on, tell it what to boot. The only plane
    that needs hardware you don't already have.
 2. **Enrollment and identity** — the machine acquires an identity that outlives
