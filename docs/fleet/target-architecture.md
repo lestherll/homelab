@@ -125,9 +125,16 @@ fast-unreplicated Longhorn/SSD  1          PLATFORM-INTERNAL, see §5.2
 ## 4. Network (Infrastructure)
 
 - **Bridged**, so nodes and KubeVirt VMs sit directly on the LAN.
-- **Cilium in CNI-chaining mode** over Flannel, as today — it exists to make
-  `NetworkPolicy` enforce. `allow-node-to-pods.yaml` stays; probes still arrive
-  from the bridge as `world`.
+- **Cilium as the only CNI** — **changed 2026-09-01**, replacing "chaining over
+  Flannel, as today". `cluster.network.cni.name: none` and
+  `cluster.proxy.disabled: true` retire Flannel and kube-proxy together, with
+  `kubeProxyReplacement: true` and `autoDirectNodeRoutes: true` — the latter
+  valid precisely because this section makes the fleet L2-adjacent on one
+  bridged LAN. `allow-node-to-pods.yaml` and `cni-configuration.yaml` are
+  **deleted**: both are chaining artefacts, and probes stop arriving as `world`
+  once Cilium owns the bridge. Rides §4.1's one rebuild — these are bootstrap
+  manifests and do not retrofit. Reasoning, costs and the enforcement re-test in
+  `docs/fleet/cilium-only-networking.md`.
 - **Tailscale for all external access**, with one change forced by HA: app
   exposures move from per-Ingress proxies to a **`ProxyGroup`** with replicas, so
   a proxy is not a single point of failure.
