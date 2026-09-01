@@ -264,6 +264,14 @@ Everything that must ride inside it:
   `discovery.talos.dev`; nobody chose that. It buys nothing on one LAN, and its
   self-hosting escape hatch is BUSL with **no** use grant — a worse licence than
   Omni's. Machine-config change, so it lands in a rebuild, not in place.
+- **Cilium as the only CNI** — `cluster.network.cni.name: none` and
+  `cluster.proxy.disabled: true`, retiring Flannel *and* kube-proxy. Both are
+  Talos **bootstrap manifests**, so this is the same "does not retrofit" class as
+  the discovery item above: it lands on a rebuild or as manual DaemonSet surgery.
+  It is a net deletion — `cni-configuration.yaml`, `allow-node-to-pods.yaml` and
+  `talos.tf`'s kube-proxy metrics workaround all go with it, and the pod network
+  does not renumber. The cost is losing Flannel as a working-without-policy
+  fallback. Full accounting in `docs/fleet/cilium-only-networking.md`.
 - **cluster-qualified Tailscale tags** — promoted here from §6/§8.2, because a
   `ProxyGroup`'s tags *"cannot be changed once a device has been created"* and
   retagging an exposure burns its cached certificate. `tag:k8s-<cluster>` owned
