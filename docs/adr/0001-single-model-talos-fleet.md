@@ -71,7 +71,7 @@ NOW ─────────────────────────�
 
  [1] THE ONE REBUILD (§4.1)   spend it at N=1, while data is expendable
      ├ bridged network + VIP
-     ├ generous certSANs            baked into certs — unchangeable later
+     ├ generous certSANs            hygiene, not irreversibility (§4.2)
      ├ Longhorn extensions          iscsi-tools, util-linux-tools
      ├ Tailscale extension
      ├ discovery service OFF        unchosen default, worst licence in the stack
@@ -86,12 +86,14 @@ NOW ─────────────────────────�
      ├ postBuild substitution
      └ auto-suffix the Application host
 
- [4] MACHINE 2 & 3 ARRIVE     netboot → join → done
+ [4] MACHINE 2 & 3 ARRIVE     USB install → apply → join (§8.4)
 ```
 
 Why [1] is one batch rather than four changes: every item is something that gets
 *baked in* — a certificate, a device tag, an installer image. Cheap now, a
-rebuild later. So they are spent together, once.
+rebuild later. So they are spent together, once. **Two of them turned out to be
+cheaper than that** — extensions and certSANs are both changeable in place — but
+the batching still holds for the items that are not; see §4.1 and §4.2.
 
 **What is settled, and what is not.**
 
@@ -101,7 +103,7 @@ rebuild later. So they are spent together, once.
 | Per-cluster Tailscale tags | **Yes**, one Helm value (§8.2) — but the *operator* tag must split too, or the control is decorative |
 | Omni | **Not needed** (§8.3, `talos-without-omni.md`). Licensing is fine; the gap it fills is empty at N=3 |
 | Multi-arch | **Already true** (§8.6). Every image in the tree is amd64 + arm64 |
-| Netboot mechanism | **Staged** (§8.4). USB now; plain iPXE when netboot is wanted; Tinkerbell (Smee + `Hardware`) when a hand-maintained iPXE config is the thing going wrong |
+| Netboot mechanism | **Staged** (§8.4). USB now — media is a bootstrap, not an operating mechanism; plain iPXE when netboot is wanted; Tinkerbell (Smee + `Hardware`) when a hand-maintained iPXE config is the thing going wrong |
 | Remote power | **Open, and now a hardware question** (§8.4). No machine has a BMC or AMT, and a smart plug cannot power-cycle machine 1 — it is a laptop |
 | Ansible for non-cluster machines | Open (§8.5). A judgement call, not a research question |
 
@@ -255,7 +257,13 @@ Everything that must ride inside it:
 - the CSI driver's Talos extensions in the machine config — resolved to
   `siderolabs/iscsi-tools` + `siderolabs/util-linux-tools` for Longhorn (§8.1).
   Bake them even if Longhorn is installed later; an unused extension costs
-  nothing and a missing one costs this rebuild twice.
+  nothing. **Corrected 2026-08-30:** the original reason given here — *"a missing
+  one costs this rebuild twice"* — is wrong. Extensions are added to a running
+  node in place, by upgrading to a new schematic's installer image
+  (`talosctl upgrade --image factory.talos.dev/installer/<schematic>:<version>`),
+  which is a reboot rather than a rebuild. So this stays on the list for
+  convenience — one fewer operation later — not because deferring it is
+  expensive. See `docs/fleet/install-media-and-reprovisioning-notes.md` §1.
 - the Tailscale extension (LES-145)
 - `allowSchedulingOnControlPlanes` decided properly (LES-155)
 - **`cluster.discovery.enabled: false`** — from
@@ -288,10 +296,21 @@ Miss one and the rebuild is spent without buying the property.
 > tailnet names, `localhost` — generously, on day one.**
 
 `terraform/modules/talos-cluster/talos.tf` currently sets
-`certSANs = [var.node_ip]` with `node_ip = "10.10.0.10"`. **Anything embedded in
-a certificate is a future rebuild**, because Talos's PKI cannot be re-issued
-without one. certSANs are free; being stingy is what converts "I changed my LAN
-subnet" into a cluster rebuild.
+`certSANs = [var.node_ip]` with `node_ip = "10.10.0.10"`. certSANs are free, and
+being stingy is what turns "I changed my LAN subnet" into an afternoon.
+
+**Corrected 2026-08-30.** This section originally read *"anything embedded in a
+certificate is a future rebuild, because Talos's PKI cannot be re-issued without
+one."* That is false for the example it was written about: adding `certSANs`
+regenerates the affected **leaf** certificates in seconds, no reboot, and it is a
+plain `talosctl apply-config` / `terraform apply`. The rule survives applied to
+the right nouns — what is genuinely bake-once is the cluster's **identity**: the
+CA, `cluster.id`/`cluster.secret`, and (outside Talos entirely) the Tailscale
+`ProxyGroup` tags of §8.2, which are immutable once a device exists and burn a
+certificate to change. Rotating the cluster CA is possible but is a multi-step
+bundle procedure, not a config edit. So be generous with certSANs as hygiene, and
+spend the identity items at N=1 because *those* are the ones that do not move.
+Detail in `docs/fleet/install-media-and-reprovisioning-notes.md` §1 and §7.
 
 The same failure in milder form: `talos-cp-01` appears as a literal in
 `infrastructure/storage/provisioners.yaml` (three times) and
@@ -471,10 +490,13 @@ the `Hardware` CRD. Full analysis in `docs/fleet/tinkerbell-investigation.md`.
 
 ## 8. Open questions
 
-Four of the six were resolved on 2026-08-30 against the live chart values, the
-registries and the vendors' own licence text. Each is marked with what it now
-forces; two of the resolutions move an item *out* of this section and into §4,
-which is the useful half of the exercise.
+Five of the six are now resolved — four on 2026-08-30 against the live chart
+values, the registries and the vendors' own licence text, and §8.4 later the same
+day against the live LAN and the vendors' own docs. Each is marked with what it
+now forces; two of the resolutions move an item *out* of this section and into
+§4, which is the useful half of the exercise. §8.4's resolution runs the other
+way — it sends two items *back* out of §4, having found them cheaper than this
+document assumed.
 
 ### 8.1 Storage implementation — **RESOLVED: Longhorn.**
 
@@ -636,7 +658,11 @@ without a second look at the ~10-machine trigger. Recommendation unchanged: revi
 Metal3/Ironic at the ~10-machine trigger §7 already names, and keep the all-Talos
 base that makes either adoptable then.
 
-### 8.4 Netboot mechanism — **RESOLVED: staged.** Power stays open.
+### 8.4 Netboot mechanism — **RESOLVED: staged, USB now.** Power stays open.
+
+Full working: `docs/fleet/install-media-and-reprovisioning-notes.md` (how often
+media is needed at all) and `docs/fleet/inventory-and-provisioning-approach.md`
+(what to build around it).
 
 Unchanged in stakes: a Talos machine joined by config is identical regardless of
 how the config arrived, so the mechanism stays swappable. What §8.1 adds is that
@@ -644,28 +670,58 @@ the *artifact* it serves is an Image Factory schematic carrying the Longhorn
 extensions, so the schematic must be settled before the first machine netboots
 even though the serving mechanism need not be.
 
-`docs/fleet/fleet-control-plane-survey.md` §4 narrows the field to two, differing
-by appetite rather than correctness: schematic + iPXE + DHCP `next-server` (no
-new control plane, sufficient at N=3), or Tinkerbell with its BMC component
-Rufio left out (hardware, templates and workflows as CRDs, so it joins Flux
-rather than displacing it). It also flags the cheapest item on either list, which
-is not software: a smart plug per machine is a power interface for consumer
-hardware that has no BMC, and MAAS's webhook power driver is the existing proof
-that the pattern works.
+**But the question was being asked in the wrong order.** It compared serving
+mechanisms — iPXE vs Tinkerbell — before establishing how often a machine needs
+one. It needs one on first install and almost never again, which shrinks the
+decision considerably:
 
-**Resolved 2026-08-31, into three stages rather than one choice** — see
-`docs/fleet/inventory-and-provisioning-approach.md`:
+| Change | Mechanism | Media? |
+| --- | --- | --- |
+| Any machine-config field (network, `certSANs`, VIP, user volumes) | `terraform apply` | no |
+| Talos or Kubernetes version | `talosctl upgrade` / `upgrade-k8s` | no |
+| Add or remove a system extension | `talosctl upgrade --image .../installer/<schematic>` | no |
+| Return a node to a clean, unconfigured state | `talosctl reset` | no |
+| First install; changing the install disk; replaced hardware | — | **yes** |
 
-1. **USB install, now.** Netboot is deferred; machines 1–3 are installed from a
-   stick per `docs/fleet/headless-talos-install.md`. At N=2 this is not a
-   compromise, it is the cheaper correct answer.
-2. **Plain iPXE + DHCP `next-server`, when netboot is wanted.** Unchanged from
-   the option above; the artifact is still §8.1's schematic.
+Read that against §4.1: the recurring fleet operations are all API calls, and
+`talosctl reset` means even "give this machine back to me empty" is one. The
+install-disk row is the sharp edge — editing `machine.install.diskSelector` on an
+installed node does nothing at all, silently, because the installer only runs
+when no installation is found.
+
+**Resolved 2026-08-31, into three stages rather than one choice**, and the table
+above is why the first stage is not a compromise:
+
+1. **USB install, now.** A stick built from the §8.1 schematic, per
+   `docs/fleet/headless-talos-install.md`. It needs nothing running on the
+   operator Mac, it matches the workflow already proven on this hardware for
+   Ubuntu, and it makes delivery a non-blocker for machine 2. Two variants: media
+   boots and the config arrives over the API (`headless-talos-install.md` Route
+   B), or fully unattended with the config on a second volume labelled
+   `metal-iso`, the exact analogue of the Ubuntu autoinstall stick.
+2. **iPXE when netboot is actually wanted** — designed and deferred, not
+   rejected. Its whole advantage is the *second* install, which the table values
+   lower than the survey did. The form to adopt is in the notes' §5: iPXE loaded
+   from a stick that stays in the machine, chaining to a per-MAC intent file
+   served over plain HTTP from the Mac, with a 404 falling through to local disk.
+   That needs **no DHCP participation whatsoever**, which is what makes it
+   preferable to the dnsmasq proxyDHCP that the survey's `next-server` framing
+   implied. proxy mode would satisfy the "router stays the only DHCP server"
+   constraint, but it puts a root daemon on a Wi-Fi-attached laptop and depends
+   on UEFI proxyDHCP behaviour whose failure mode is a silent fallthrough on a
+   machine with no video.
 3. **Tinkerbell as Smee + the `Hardware` CRD, when a hand-maintained iPXE config
    becomes the thing going wrong.** Not the workflow engine — Talos installs
    itself — and not with Cluster API (§7). `Hardware` objects describe machines
    that already exist, so a fleet installed from USB adopts into Tinkerbell later
    without reinstalling anything: arriving late costs nothing.
+
+**And its trigger moves further out.** The survey framed Tinkerbell as "reach for
+it when 'reinstall a machine I can't reach' becomes recurring." That capability is
+worth less than assumed, for the same reason iPXE is: re-provisioning is not a
+recurring operation. What remains genuinely media-shaped is hardware failure,
+which needs hands regardless. The smart plug keeps its place on the list, but for
+*wedged* machines, not for provisioning.
 
 **The power half of this question stays open, and is now a hardware question
 rather than a software one.** Two corrections to the paragraph above, both from

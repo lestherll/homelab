@@ -174,6 +174,17 @@ Fetch only what your route needs.
 
 All from `https://github.com/siderolabs/talos/releases/download/v1.13.8/`.
 
+> **Correct for this guide, wrong for the fleet.** Stock release assets carry no
+> system extensions, which is fine here — the end state is a machine in
+> maintenance mode holding nothing. The moment this machine is meant to *join*
+> ([§10](#10-joining-the-cluster)) the image has to come from an Image Factory
+> schematic instead, because ADR §8.1 puts `siderolabs/iscsi-tools` and
+> `siderolabs/util-linux-tools` (Longhorn) plus the Tailscale extension in it.
+> Extensions can be added later in place — `talosctl upgrade --image
+> factory.talos.dev/installer/<schematic>:v1.13.8` — so this is a "do it in the
+> right order", not a "do it or rebuild". See
+> [install-media-and-reprovisioning-notes.md](install-media-and-reprovisioning-notes.md).
+
 ### 2.3 Generate the throwaway config now, not later
 
 Do this before touching the machine, so a `talosconfig` exists on disk from the
@@ -184,7 +195,7 @@ using `--insecure`.
 workaround; it follows from the scope. Nothing here joins a cluster, so nothing
 here needs the real Talos PKI. The config generated below is a *fresh,
 disposable* PKI whose only job is to carry `machine.install` to the node, and
-[§9](#9-back-to-maintenance-mode-the-actual-end-state) destroys it again.
+[§9](#9-back-to-maintenance-mode--the-actual-end-state) destroys it again.
 
 ```bash
 cd ~/talos-worker0
@@ -235,7 +246,7 @@ Three of those arguments carry real weight:
   Do **not** run `talosctl bootstrap` at any point. There is no cluster here.
   Without bootstrap, `etcd` simply waits and the apiserver never starts; the
   node boots, is reachable, and does nothing else — which is exactly what is
-  wanted for the few minutes before [§9](#9-back-to-maintenance-mode-the-actual-end-state).
+  wanted for the few minutes before [§9](#9-back-to-maintenance-mode--the-actual-end-state).
 
 Point the config at the node:
 
@@ -289,6 +300,15 @@ Both need Secure Boot already off.
 completely untouched until you deliberately apply a config, so the whole thing
 up to that point is a rehearsal you can abort with the power switch. Route B is
 the fallback for when kexec will not go.
+
+> **Route A is available exactly once.** It works because Ubuntu is still running
+> and can jump to a new kernel. After the wipe there is no Ubuntu, so any *future*
+> re-provision of this machine is Route B or a netboot mechanism — which is the
+> question ADR §8.4 settles, and it settles it as "USB, and rarely". Rarely,
+> because once Talos is on the disk, config changes, version upgrades, extension
+> changes and even wiping the node back to maintenance mode are all API calls.
+> [install-media-and-reprovisioning-notes.md](install-media-and-reprovisioning-notes.md) §1
+> has the table.
 
 ---
 
@@ -384,7 +404,13 @@ Then go to [§6](#6-verifying-blind).
 
 The Talos metal ISO is a hybrid image; `dd` is all it needs, and no remastering
 step exists here — unlike the Ubuntu install, Talos takes its config over the
-network afterwards rather than baked into the media.
+network afterwards rather than baked into the media. (It *can* be baked in;
+[§5.3](#53-optional--unattended-install-config-on-a-second-stick) covers that,
+and explains why it is not the default.)
+
+For a machine that will join the cluster, take the ISO from the Image Factory
+schematic rather than the release — `https://factory.talos.dev/image/<schematic>/v1.13.8/metal-amd64.iso`
+— per the call-out in [§2.2](#22-the-boot-assets).
 
 ```bash
 cd ~/talos-worker0
@@ -435,6 +461,54 @@ the stick, or check that Secure Boot really is off.
 
 Verify `Boot0006` still exists before relying on it; firmware occasionally
 regenerates removable-media entries.
+
+> **`BootNext` covers the boot you asked for, not the one after it.** It is
+> consumed by a single boot attempt, so the *post-install* reboot falls back to
+> `BootOrder` — which on this machine is `0000,000A,000B,0006,...`, i.e. a
+> dangling Ubuntu entry, two PXE timeouts, and then the USB stick you are still
+> holding in the slot. With the stick in, that boots the installer again. It does
+> **not** reinstall (see the footnote at the end of [§8](#8-installing-to-the-ssd)),
+> but it is why [§9](#9-back-to-maintenance-mode--the-actual-end-state) ends with
+> "pull the USB first".
+
+### 5.3 Optional — unattended install, config on a second stick
+
+The Ubuntu install on this machine was zero-touch: an `autoinstall.yaml` baked
+into the ISO, plug in, power on, walk away. Talos has an equivalent, and it is
+worth knowing about even if you do not use it here.
+
+`talos.config=metal-iso` makes Talos *"load the machine configuration from any
+block device with a filesystem label of `metal-iso`"*, reading `config.yaml` at
+that filesystem's root. Both the label and the path are hardcoded in Talos today.
+The kernel argument is set on the image through the Image Factory schematic's
+`customization.extraKernelArgs`. So:
+
+- **stick 1** — the ISO, built from a schematic carrying
+  `talos.config=metal-iso`
+- **stick 2** — any small volume labelled `metal-iso`, holding `config.yaml`
+
+Plug both in, boot, and the machine installs itself with no `apply-config` and no
+network dependency beyond the installer image pull.
+
+**Why this guide still defaults to [§8](#8-installing-to-the-ssd)'s
+`apply-config`.** Three reasons, in order:
+
+- The config on stick 2 is real PKI on a physical object. That beats putting it
+  on the wire, but it has to be destroyed afterwards like everything else in
+  [§9](#9-back-to-maintenance-mode--the-actual-end-state).
+- **macOS uppercases FAT volume labels.** `diskutil eraseVolume FAT32 metal-iso`
+  stores `METAL-ISO`, and Talos matches the label literally; whether that match is
+  case-sensitive is **not verified**. The failure is benign and legible — config
+  not found, machine sits in maintenance mode, fall back to `apply-config` — but
+  it is one more thing to get wrong blind.
+- It attaches a **third** block device. `--install-disk /dev/sda` is already
+  wrong under Route B; with two sticks the `diskSelector` patch from
+  [§2.3](#23-generate-the-throwaway-config-now-not-later) is the only safe form.
+
+**Not an option: `talos.config.inline`.** It takes a zstd-compressed,
+base64-encoded config directly on the kernel command line, but that line is
+capped at 4096 bytes and the docs scope it to "small configuration documents". A
+control-plane config carrying PKI is not one.
 
 ---
 
@@ -578,16 +652,31 @@ The node will be visibly unhappy — `kubelet` looping, no apiserver — because
 is a control-plane node for a cluster that was never bootstrapped. That is
 expected and about to be thrown away.
 
-> **A boot-order footnote.** The install destroys the partition `Boot0000`
-> pointed at, so that entry becomes dangling; the firmware then walks
-> `000A, 000B` — the two PXE entries — before anything else. With no PXE server
-> on the LAN each times out, which can add 30–60 seconds to every boot and, on
-> some firmware, drops to a network-boot prompt instead of falling through.
-> Talos adds its own entry during the install and firmware usually places new
-> entries first, so this often resolves itself. If boots are slow afterwards,
-> this is why — and disabling network boot during the [§1](#1-the-one-step-that-genuinely-needs-a-display)
-> firmware trip prevents it for free. You can also pre-empt it from Ubuntu
-> before the wipe with `sudo efibootmgr -o 0000,0006`.
+> **A boot-order footnote — revised 2026-08-30, because the original was
+> optimistic.** The install destroys the partition `Boot0000` pointed at, so that
+> entry becomes dangling; the firmware then walks `000A, 000B` — the two PXE
+> entries — before anything else. With no PXE server on the LAN each times out,
+> which can add 30–60 seconds to every boot and, on some firmware, drops to a
+> network-boot prompt instead of falling through. Disabling network boot during
+> the [§1](#1-the-one-step-that-genuinely-needs-a-display) firmware trip prevents
+> that for free.
+>
+> What this footnote *used* to say — *"Talos adds its own entry during the install
+> and firmware usually places new entries first, so this often resolves itself"* —
+> is not safe to lean on. Talos 1.11 briefly created its UEFI entry **and** moved
+> it to the front; that broke some systems and was changed, so current Talos
+> **creates the entry only if it does not already exist and does not modify the
+> boot order at all.** What actually makes the machine boot afterwards is the
+> fallback path: Talos writes `EFI/BOOT/BOOTX64.EFI` on the ESP, and firmware
+> discovers it. That is the normal layout and the normal behaviour — but it is
+> **not verified on this machine**, and on a box with no video an unbootable NVRAM
+> state is the worst outcome in this guide.
+>
+> Two mitigations, both cheap. Pre-empt from Ubuntu before the wipe with
+> `sudo efibootmgr -o 0000,0006` so the PXE timeouts are out of the path. And do
+> not throw the stick away: media that boots is the recovery path for exactly this
+> failure, since a netbooted or ISO-booted Talos reaches maintenance mode without
+> touching the disk entry at all.
 
 ---
 
@@ -624,7 +713,12 @@ talosctl --nodes 192.168.0.220 --insecure get disks
 **Then power-cycle it once and re-run those checks.** This is the step that
 actually proves the goal: it confirms Talos is booting *from the SSD* rather
 than from RAM (Route A) or the stick (Route B). Pull the USB first if you took
-Route B. Without this power-cycle you have verified nothing about persistence —
+Route B — and note *why* that matters, because the obvious fear is the wrong one:
+leaving it in does **not** cause a reinstall loop. Talos booted from media on a
+machine that already has Talos installed adopts that disk as its system disk and
+assumes it is installed. The real damage is quieter — the node then runs the
+*stick's* kernel with the *disk's* state, so its version is decoupled from what
+is on disk and `talosctl upgrade` stops meaning what you think it means. Without this power-cycle you have verified nothing about persistence —
 under Route A in particular, a machine that never had anything written to disk
 passes every check above right up until it is restarted.
 
@@ -695,7 +789,7 @@ expensive — but it is avoidable, and knowing that is the entire point of writi
 it down before §10.3 rather than after.
 
 Until the rebuild, the right thing to do with this machine is exactly what
-[§9](#9-back-to-maintenance-mode-the-actual-end-state) leaves it doing: sitting
+[§9](#9-back-to-maintenance-mode--the-actual-end-state) leaves it doing: sitting
 in maintenance mode, reachable, costing nothing.
 
 ### 10.2 Getting the real PKI — and where that work happens

@@ -280,7 +280,13 @@ available return.
 
 - **Node addressing on the LAN** — DHCP reservations on the router, or static
   addresses in the machine config? Static is more self-contained; reservations
-  keep one source of truth off-repo.
+  keep one source of truth off-repo. *Note (2026-08-30): the install-media
+  arrangement does not force either — the router stays the only DHCP server in
+  every option considered in
+  [install-media-and-reprovisioning-notes.md](install-media-and-reprovisioning-notes.md)
+  §3. It does add one reservation that is not a node: if the iPXE arrangement is
+  ever adopted, the operator Mac's address ends up inside the boot script and has
+  to stop moving.*
 - **Which VIP address**, and is it inside or outside the router's DHCP pool?
 - **Does machine 1 stay a hypervisor?** Settled for machines 2+ (§3.1): they run
   Talos on bare metal. Machine 1 keeps its Ubuntu/libvirt layer because the

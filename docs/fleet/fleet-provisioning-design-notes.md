@@ -678,6 +678,12 @@ one.
 11. **Then add machines.** By this point adding one is: install it, put it in a
     group or in the node list, run.
 
+*How "install it" happens is settled in ADR §8.4: USB media built from the §8.1
+schematic, not netboot — and it happens once per machine, because everything
+afterwards (config, version, extensions, wiping back to maintenance mode) is an
+API call. See
+[install-media-and-reprovisioning-notes.md](install-media-and-reprovisioning-notes.md).*
+
 ---
 
 ## 9. What this does not address
@@ -739,6 +745,63 @@ one.
   > file"*, naming neither the path searched nor the one you used — it looks
   > like a wrong key and is a missing file. Cost about ten minutes on
   > 2026-08-30 against a key whose public half provably matched `.sops.yaml`.
+
+  **Finishing the Mac, done 2026-08-31 (LES-162).** The setup above left the Mac
+  able to read secrets and nothing else: no `talosctl`, `terraform`, `flux`,
+  `helm` or `age`, and no `~/.talos/config`. All five are now installed as
+  pinned, checksum-verified `darwin-arm64` binaries in `~/.local/bin`, alongside
+  the `sops` that landed on 2026-08-30.
+
+  **The Mac reuses `cli_tools`' pins rather than keeping a list of its own.**
+  `talosctl` 1.13.8, `terraform` 1.15.8, `flux` 2.8.8 and `helm` 4.2.3 are
+  exactly `ansible/roles/cli_tools/vars/main.yml`'s values, so control node and
+  managed hosts stay on one version per tool and a bump is one edit, not two.
+  That file is therefore the pin of record for the Mac too, even though no
+  Ansible role installs anything here — `cli_tools` provisions *managed hosts*,
+  and the Mac is not one. The only tool with no entry there is `age`, pinned to
+  **v1.3.2** (sha256
+  `e2020b073c44f692685a24d6abc378817eb81ffaaf49fd0531ef8565f767f2f5` for
+  `age-v1.3.2-darwin-arm64.tar.gz`), recorded as a literal hash for the same
+  reason as `awscli` in that file: upstream publishes no checksums file. Its
+  `.proof` sidecar is a **Sigsum transparency proof, not a Sigstore bundle** —
+  `gh attestation verify` cannot read it, so do not reach for that. `age` stays
+  optional here, as noted above; it is installed for `age-keygen -y`, which is
+  the quick way to prove a key's public half matches `.sops.yaml`.
+
+  > **The age key was already in place — the gap was where it was looked for.**
+  > LES-162 opened on a measurement of `~/.config/sops/age/keys.txt`, which on
+  > macOS is the wrong path and always will be. The key had arrived on
+  > 2026-08-30 at `~/Library/Application Support/sops/age/keys.txt`, and all six
+  > encrypted files — the four under `infrastructure/`, the inventory's
+  > `ntfy_topic`, and both Talos PKI files — decrypt from it. This is the
+  > box-quoted trap above biting a second time, in the direction of a *false
+  > negative*: absence at the Linux path reads as "no key" and means nothing.
+  > Check with `sops --decrypt` against a real file, never with `ls`.
+
+  **`talosctl` reaches the node only through machine 1.** The talosconfig is
+  rebuilt from `talos-secrets.sops.yaml` per AGENT.md's recipe, with the
+  decrypted secrets *and* the two machine configs it writes alongside shredded
+  afterwards — those embed the same CA keys and the bootstrap token, so deleting
+  only `secrets.yaml` leaves the root in the clear. But the node's API lives at
+  `10.10.0.10:50000` on the libvirt NAT, which no tailnet address reaches: from
+  the Mac the port is simply dead, while machine 1 connects fine. So
+  `~/.talos/config` carries endpoint **`127.0.0.1`**, node `10.10.0.10`, and the
+  path is opened first:
+
+  ```
+  ssh -f -N -o ExitOnForwardFailure=yes \
+      -L 127.0.0.1:50000:10.10.0.10:50000 lestherll@homelab.tailf4742d.ts.net
+  ```
+
+  The node cert validates over the forward without a flag — `127.0.0.1` is
+  already a SAN. With the tunnel down every command fails as a connection
+  refusal, which is at least an honest error naming the thing to fix. **This is
+  temporary by construction**: once the bridged rebuild of §2.1 of the multi-node
+  note puts nodes on the LAN, the endpoint becomes a real address and the
+  forward goes away. Until then, note the split this creates — `terraform` is
+  installed on the Mac and *still cannot run from it*, because it needs the
+  libvirt socket, not just a reachable API. Machine 1 keeps Terraform, exactly as
+  the split above says.
 
   What [§3](#3-inventory-group-by-capability-never-by-machine) buys is that the
   choice stays *reversible*: with no `connection=local` special case, either

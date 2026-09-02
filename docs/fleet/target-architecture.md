@@ -94,9 +94,14 @@ fast-unreplicated Longhorn/SSD  1          PLATFORM-INTERNAL, see §5.2
 - **Power:** a smart plug per machine, exposed to whatever provisioning tool is
   in use. Consumer mini-PCs have no BMC; this is the substitute, and it is the
   cheapest item in the design. Without it "machine 2 is wedged" is a walk.
-- **Boot:** netboot from a Talos Image Factory schematic over iPXE, with DHCP
-  `next-server`. Start there; adopt Tinkerbell (without its BMC component
-  Rufio) only if reinstalls become routine.
+- **Boot:** from a Talos Image Factory schematic. **Amended 2026-08-30 (ADR
+  §8.4):** the first install is USB media, not netboot — after it, re-provisioning
+  is rare enough that a serving mechanism has little to do. When one is wanted, it
+  is iPXE loaded from the machine's own stick chaining to a per-MAC intent file
+  over HTTP, which needs no DHCP `next-server` and no second DHCP server. See
+  [install-media-and-reprovisioning-notes.md](install-media-and-reprovisioning-notes.md).
+  Adopt Tinkerbell (without its BMC component Rufio) only if reinstalls become
+  routine.
 - **Image:** built locally with `ghcr.io/siderolabs/imager`, not fetched from
   `factory.talos.dev` — same code, no hosted dependency, and it removes the last
   external requirement for a cold rebuild. See `talos-without-omni.md`.
@@ -303,7 +308,7 @@ The same steps whether it is machine 2 or machine 6.
 
 ```
  1. rack, cable, smart plug
- 2. power on ──▶ PXE/iPXE ──▶ Talos kernel+initramfs from the local schematic
+ 2. power on ──▶ USB media (or iPXE) ──▶ Talos from the schematic
  3. Talos boots into MAINTENANCE MODE
         no config, no cluster, an API on :50000, waiting
  4. add the machine to Terraform's node list ──▶ terraform apply
@@ -319,10 +324,11 @@ The same steps whether it is machine 2 or machine 6.
 
 Three things worth understanding about that sequence:
 
-- **Netbooting gets a machine an OS, not cluster membership.** A box that PXE
-  boots on this LAN sits in maintenance mode doing nothing until someone applies
-  a config to it. That gap is the security boundary, and it is why nothing here
-  auto-enrols.
+- **Booting the install media gets a machine an OS, not cluster membership.** A
+  box that boots Talos on this LAN sits in maintenance mode doing nothing until
+  someone applies a config to it. That gap is the security boundary, and it is why
+  nothing here auto-enrols. It is also what makes step 2 safe to repeat: media
+  reaches maintenance mode without touching an existing install.
 - **This is why disabling discovery is safe.** The joining node does not need to
   *find* the cluster — its config already contains the endpoint (the VIP), the
   cluster CA and a join token. Discovery exists for members finding each other

@@ -190,6 +190,18 @@ differ by how much you want, not by which is correct:
 Either way the artifact served is the schematic from §8.1, which is why that
 question had to be settled first.
 
+> **Resolved 2026-08-30, and neither answer won as written.** Both options above
+> price a *serving mechanism* before establishing how often a machine needs one.
+> It needs one on first install and almost never after: config changes, Talos and
+> Kubernetes upgrades, adding or removing system extensions, and wiping a node
+> back to maintenance mode are all API calls against `apid`. So machines 1 and 2
+> are built from a **USB stick** carrying the §8.1 schematic, and the "just boot"
+> option is deferred rather than adopted — in a form that needs no DHCP
+> participation at all (iPXE from the stick, per-MAC intent file over HTTP), not
+> the `next-server` shape assumed above. Tinkerbell's trigger weakens for the same
+> reason. Full working:
+> [install-media-and-reprovisioning-notes.md](install-media-and-reprovisioning-notes.md).
+
 ## 5. The near-misses: systems that look like the answer
 
 ### Harvester — D20's target shape, already shipped
@@ -311,13 +323,23 @@ Plane 4 is the column that matters; plane 1 is the column that costs money.
 3. **Netboot: start with the schematic and iPXE** (§8.4). Reach for Tinkerbell
    only when "reinstall a machine I can't reach" becomes recurring — it is CRDs,
    so it joins Flux rather than displacing it.
-   > **Wrong trigger**, per `docs/fleet/tinkerbell-investigation.md` §7:
+   > **Wrong trigger, and the event it fires on is rarer than assumed.** Two
+   > corrections, and they compound in the same direction.
+   > *The trigger is misstated* (`docs/fleet/tinkerbell-investigation.md` §7):
    > Tinkerbell without a BMC cannot reinstall an unreachable machine either — it
    > changes what a machine boots *next time it boots*, and something else still
    > has to power-cycle it. The real trigger is "per-machine boot config in git,
    > and machines that enrol themselves". Remote power is a separate hardware
-   > purchase — or free, if the machines turn out to have Intel vPro/AMT, which
-   > Rufio supports natively and nothing here had considered.
+   > purchase, and per bullet 1's caveat, not one a laptop accepts.
+   > *And re-provisioning is not recurring*
+   > ([install-media-and-reprovisioning-notes.md](install-media-and-reprovisioning-notes.md)
+   > §1): every recurring fleet operation — machine config, system extensions,
+   > Talos and Kubernetes versions, even handing a node back empty via
+   > `talosctl reset` — is an API call against port 50000. Media is a bootstrap,
+   > not an operating mechanism. **So: settle the schematic and use a USB stick.**
+   > The schematic is the part that matters; iPXE is designed in §5 of those
+   > notes for when it earns its place, and that moment is further away than this
+   > bullet assumed, not closer.
 4. **Don't build plane 4 for machines.** At N=3, the pod scheduler already is
    plane 4 for everything including KubeVirt VMs, which are scheduled by the same
    scheduler. This is the part D20 gets for free and that Proxmox, Incus and MAAS
