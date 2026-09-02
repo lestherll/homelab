@@ -8,10 +8,15 @@
 # and the workloads in that cluster — belongs to terraform/ and Flux, and
 # nothing here should grow to reach into them.
 #
-# Note sudo, not -K: this host's sudo-rs doesn't match Ansible's become-prompt
-# regex. See the comment block in ansible.cfg.
+# Run it plainly — no -K, and no top-level sudo. Escalation on the target comes
+# from a NOPASSWD sudoers drop-in, because this host's sudo-rs wraps Ansible's
+# become prompt in a form Ansible cannot parse; see the comment block in
+# ansible.cfg. Wrapping the command in sudo would now be actively wrong: hosts
+# are reached over SSH, so it would only run Ansible as root ON THE CONTROL
+# NODE, where it would look for root's SSH key and root's age key and find
+# neither.
 #
-#   sudo ansible-playbook -i ansible/inventory/hosts.ini \
+#   ansible-playbook -i ansible/inventory/hosts.ini \
 #     ansible/playbooks/converge.yml --tags host_prereqs,bulk_storage,cli_tools
 #
 # heartbeat_watchdog is tagged separately because it hard-fails until a real
