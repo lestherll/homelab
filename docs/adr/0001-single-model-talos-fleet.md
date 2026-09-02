@@ -244,6 +244,22 @@ whole point of recording them here rather than discovering them.
 
 ### 4.1 The one rebuild
 
+> **Reframed 2026-09-02 — see `docs/fleet/machine-2-first-build-plan.md`.**
+> This section's whole tension is that there is *one* rebuild in which every
+> baked-in setting must be right, on the machine that serves everything. **That
+> stops being true if the new cluster is built on machine 2 first**, with the
+> real PKI, while machine 1 keeps running the live platform. Machine 2 holds
+> nothing, so it affords unlimited rehearsals; machine 1 then gets exactly one
+> rebuild, executed from a procedure already proven end to end.
+>
+> The list below does not change — everything on it still has to be right. What
+> changes is that getting it wrong costs a re-run rather than an outage, which is
+> the difference this ADR has been designing around. Two further reasons that
+> ordering wins: machine 1 **runs on Wi-Fi and Talos has no Wi-Fi**
+> (`terraform-on-bare-metal.md` §0), so it cannot be a Talos node until it is
+> cabled; and building elsewhere keeps a working platform and a free rollback for
+> the whole exercise.
+
 The bridged-network + VIP work (LES-151) is currently framed as an HA
 prerequisite. Reframe it: **it is the last rebuild, and it should be spent at
 N=1**, where a rebuild is `terraform destroy && apply` on a cluster whose data is

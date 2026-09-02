@@ -114,14 +114,24 @@ cluster endpoint becomes a VIP on that subnet rather than `10.10.0.10`.
 ### 3.1 Machines 2+ run Talos on bare metal, not nested
 
 Decided 2026-08-29 on hardware grounds, not preference. `homelab-worker-0`
-measured: **3.2 GiB RAM**, i3-7100 (2c/4t), one 476.9 G SSD, and **`/dev/kvm`
-absent with zero CPUs reporting `vmx`** — VT-x is disabled in firmware. Two
-independent blockers to nesting:
+measured: **7.2 GiB RAM**, i3-7100 (2c/4t), one 476.9 G SSD, and **`/dev/kvm`
+absent with zero CPUs reporting `vmx`** — VT-x is disabled in firmware.
+
+> **RAM updated 2026-09-02: the machine now has 7.2 GiB.** 3.2 GiB was correct
+> when this was written (measured 2026-08-29); **the operator upgraded the RAM**
+> before the Talos install. So this is a hardware change, not a corrected
+> measurement — the reasoning below was sound on the hardware it was given. It
+> does not change this section's decision, since the KVM blocker is independent
+> and sufficient, but it does retire the HA judgement further down, which rested
+> entirely on the old figure.
+
+The nesting blocker that survives the upgrade:
 
 - Without KVM, QEMU falls back to full emulation. Unusable for a cluster node,
-  and re-enabling VT-x needs a BIOS trip.
-- 3.2 GiB leaves roughly 2.5 GiB for a guest after Ubuntu, below Talos's
-  practical floor. Machine 1's VM is allocated 12 GiB for comparison.
+  and re-enabling VT-x needs a BIOS trip. This alone decides it.
+- The RAM argument that used to sit here — *"3.2 GiB leaves roughly 2.5 GiB for
+  a guest, below Talos's practical floor"* — **no longer applies** at 7.2 GiB.
+  Nesting would now fit; it is still rejected, on the KVM ground alone.
 
 **What this costs.** Talos has no SSH or shell either way — that is not the
 difference. What bare metal removes is the *layer underneath*: `virsh console`
@@ -149,11 +159,15 @@ What remains true is narrower: *this particular machine*, `homelab-worker-0`,
 runs bare-metal Talos and needs no Ansible — a per-machine fact, not a fleet-wide
 simplification.
 
-**A consequence for HA.** 3.2 GiB is fine for a worker and marginal for a
-control-plane node — etcd plus apiserver wants ~4 GiB. Since HA needs three
-control planes, either this machine gets more RAM (DDR4 for a ThinkCentre
-M710-class box is cheap and is the highest-leverage spend in this plan) or HA
-waits for two further machines rather than one.
+**A consequence for HA — resolved 2026-09-02, by doing it.** This said *"3.2 GiB
+is fine for a worker and marginal for a control-plane node — etcd plus apiserver
+wants ~4 GiB"*, and offered two ways out: more RAM, or waiting for two further
+machines. **The RAM was bought.** At 7.2 GiB the machine is comfortably above
+that ~4 GiB bar and is a viable control plane as it stands.
+
+HA still waits for **machine 3**, which is the etcd-quorum constraint of §1 and
+is unaffected by any amount of RAM. Worth noting the shape of what happened: the
+recommendation was acted on, so the paragraph is spent rather than wrong.
 
 ### What bridging invalidates
 
@@ -240,8 +254,8 @@ before any code moves.
 
 **When machine 3 arrives:**
 
-- Confirm machine 2 has the RAM to be a control plane (§3.1 — 3.2 GiB is
-  marginal; upgrade it, or make machine 3 and a fourth the control planes).
+- ~~Confirm machine 2 has the RAM to be a control plane~~ — **done**: upgraded
+  to 7.2 GiB, sufficient. See §3.1.
 - Rebuild machine 2 as a control-plane node and add machine 3 as one, giving
   three etcd members in one step. Talos has no in-place worker→control-plane
   promotion; that node gets wiped and rejoined, which is cheap precisely

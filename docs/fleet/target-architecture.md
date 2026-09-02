@@ -116,9 +116,21 @@ fast-unreplicated Longhorn/SSD  1          PLATFORM-INTERNAL, see §5.2
 - **Talos VIP** for the API server — a shared L2 address that moves on failure.
   This is what makes "no downtime" true for the control plane, and it is why
   bridged networking is a prerequisite rather than a nicety.
+
+  > **Machine 1 cannot satisfy this today, and the reason is not networking
+  > config.** Measured 2026-09-02: it runs on **Wi-Fi** (`wlp3s0`), with its
+  > Ethernet port unplugged. **Talos has no 802.11 support in its kernel at
+  > all**, so that machine has no usable interface under Talos until it is
+  > cabled — and a wireless link could not carry an L2 VIP in any case. Cabling
+  > it changes its address, and drops the link to 100 Mbit, which lands on
+  > Longhorn replication. See `terraform-on-bare-metal.md` §0 and
+  > `hardware-fit-notes.md` §1.
 - **`certSANs` enumerated generously** on day one: the VIP, every machine's LAN
-  address, the LAN range, tailnet names, `localhost`. Anything omitted is a
-  future rebuild.
+  address, the LAN range, tailnet names, `localhost`. **Not because an omission
+  costs a rebuild** — it does not; `certSANs` regenerate the affected leaf
+  certificates in seconds with no reboot, since the apiserver is a static pod
+  rather than a bootstrap manifest (`install-media-and-reprovisioning-notes.md`
+  §7). Generosity here saves an operation later, nothing more.
 - **`cluster.discovery.enabled: false`.** Nothing on one LAN needs it, and its
   self-hosting escape hatch is BUSL with no use grant.
 - **Node names assigned, never hardcoded.** `talos-cp-01` currently appears as a
@@ -355,10 +367,12 @@ Assumes three machines broadly like machine 1 (8 cores, 15Gi) — **verify befor
 committing**, because Longhorn replica placement wants comparable disk sizes.
 
 > **Verified, and it does not hold** — `docs/fleet/hardware-fit-notes.md`.
-> Machine 2 is a ThinkCentre M710e with **3.2Gi and one disk**, not 15Gi and two.
-> Fleet RAM is 18.2Gi across two machines, not 45Gi across three, and the
-> ~2.9Gi per-machine floor (Talos+kubelet, etcd, Cilium, Longhorn) consumes ~90%
-> of machine 2 before any workload. The `bulk` tier cannot reach its 2 replicas
+> Machine 2 is a ThinkCentre M710e with **7.2Gi and one disk**, not 15Gi and two.
+> Fleet RAM is 22.2Gi across two machines, not 45Gi across three. (It had 3.2Gi
+> when this warning was written, which put the ~2.9Gi per-machine floor of
+> Talos+kubelet, etcd, Cilium and Longhorn at ~90% of the machine. **The RAM was
+> upgraded 2026-09-02**; the floor is now ~40%, so machine 2 has real headroom
+> and the RAM half of this warning is spent. The disk half is not.) The `bulk` tier cannot reach its 2 replicas
 > either: the fleet contains exactly one HDD. Both are fixed by parts — RAM and a
 > 3.5" drive, into bays that are already free — not by redesign.
 

@@ -115,7 +115,18 @@ warm reboot.
 
 ## 4. What this corrects elsewhere
 
-Five stale or wrong facts, each of which would have cost time:
+Five places the docs were out of step with the machine, each of which would have
+cost time. Note they are not all the same kind of thing: three are facts that were
+simply wrong, one is a value that **moved** (the address), and one is hardware
+that **changed** (the RAM was upgraded, so the old figure was correct when
+written).
+
+> **All of these have since been applied in place (2026-09-02), along with a
+> sixth found afterwards** — `headless-talos-install.md` §10.2's claim that the
+> Mac has neither `sops` nor the age key, which is false: both are on the Mac at
+> `~/Library/Application Support/sops/age/keys.txt`, verified by decrypting both
+> Talos secrets files. This section is kept as the record of what the run found,
+> not as a list of outstanding work.
 
 - **The operator Mac is `192.168.0.44`, not `192.168.0.48`.**
   [install-media-and-reprovisioning-notes.md](install-media-and-reprovisioning-notes.md) §0
@@ -131,7 +142,8 @@ Five stale or wrong facts, each of which would have cost time:
   `HostnameConfig` document, and `talosctl gen config` already emits one
   (`auto: stable`) — so it must be *edited*, not appended, or validation fails
   with `duplicate document`.
-- **Machine 2 has 7.2 GiB of RAM, not 3.2 GiB.**
+- **Machine 2 now has 7.2 GiB of RAM** — not a mismeasurement, an **upgrade**
+  fitted after the 2026-08-29 survey.
   [headless-talos-install.md §0](headless-talos-install.md) records 3.2.
   [multi-node-ha-design-notes.md §3.1](multi-node-ha-design-notes.md) calls
   3.2 GiB "marginal" for a control-plane node; at 7.2 GiB that concern largely

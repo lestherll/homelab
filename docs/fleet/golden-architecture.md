@@ -71,7 +71,8 @@ layer notices, which is why §4 is the section that matters.
 Two things the diagram is making explicit that prose keeps losing:
 
 - **The arrows point up.** A layer offers a contract; it does not reach into the
-  one above. Every leak in §5 is a case where that failed.
+  one above. Every leak in §5 is a case where that failed — with one exception,
+  the Cilium seed, which is the only leak so far pointing *down*.
 - **The cross-cutting pair sit beside the stack, not in it.** Forcing
   `tailscale-acl/` into a layer is what makes people think it is reconciled by
   Flux, which is exactly the mistake AGENT.md warns about.
@@ -91,9 +92,11 @@ migration leaves them untouched, and why `target-architecture.md`'s invariant 3
 (*"storage classes name guarantees, not implementations"*) is this invariant
 stated for one layer.
 
-The rule that keeps it true: **a change that forces an edit in the layer above is
-a boundary violation, and gets recorded as one** — not silently absorbed. §5 is
-that record.
+The rule that keeps it true: **a change that forces an edit in a *neighbouring*
+layer is a boundary violation, and gets recorded as one** — not silently
+absorbed. §5 is that record. It was written as "the layer above", which held
+until 2026-09-02; the Cilium seed is the first violation in the other
+direction.
 
 ## 4. The evidence: this boundary has been tested three times
 
@@ -154,8 +157,9 @@ are the real leaks, each with its direction:
 | `replicas > 1` and `persistence` become mutually exclusive (RWO means one node) | Infrastructure → Platform API |
 | Per-`Application` `NetworkPolicy` keys on Tailscale `parent-resource` labels, so moving to a `ProxyGroup` breaks every instance at once | Infrastructure → Platform API |
 | **`bulk` cannot reach its specified 2 replicas, because the fleet contains exactly one HDD** | **Fleet → Platform API, skipping Infrastructure** |
+| **Terraform must seed Cilium via `inlineManifests`, because with `cni: none` Flux cannot install the CNI that Flux needs to run** | **Infrastructure → Fleet** |
 
-**The last one is the sharpest, and it is new.** `target-architecture.md` §5.1
+**The `bulk`-replicas row is the sharpest.** `target-architecture.md` §5.1
 specifies `bulk` at two replicas; `hardware-fit-notes.md` §5 establishes that
 only machine 1 has a spinning disk. A *hardware inventory fact* therefore reaches
 a *durability promise made to app authors* without passing through the
@@ -164,10 +168,22 @@ a £30 drive — but the interesting part is not the fix, it is that **a two-lay
 jump is the failure mode this architecture is least protected against**, and
 nothing before now would have caught it.
 
-Worth stating plainly: four of these five are Infrastructure → Platform API, and
+Worth stating plainly: four of these six are Infrastructure → Platform API, and
 all four arrive with the same change (the Longhorn migration). **Leaks cluster at
 migrations**, which is an argument for landing D20's Platform API changes in one
 revision, as `platform-api-under-d20.md` already recommends.
+
+**The last row, added 2026-09-02, is the first leak that points *downward*** —
+every other row has a layer forcing a change in the layer *above* it. Here
+Infrastructure's choice of CNI reaches down and gives the Fleet layer a new job,
+because Cilium-only leaves the cluster unable to bootstrap itself: nodes stay
+`NotReady` without a CNI, Talos reboots them every ten minutes to retry, and
+Flux's own controllers are pods that cannot run until the CNI they would install
+already exists. Terraform's contract therefore moves from *"an empty cluster"* to
+*"a cluster with a CNI"*. **That should stay the only downward exception** — no
+`kubernetes` provider, no `helm` provider, nothing else from `infrastructure/`
+pulled into Terraform. See `cilium-only-networking.md` §5.1 and
+`terraform-on-bare-metal.md` §5.
 
 ## 6. Where the repo layout disagrees with the layering
 

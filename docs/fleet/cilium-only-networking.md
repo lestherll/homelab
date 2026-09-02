@@ -130,6 +130,52 @@ include the CNI**. Spending the rebuild on the VIP, `certSANs`, extensions and
 discovery, and then discovering the CNI needed the same window, is the failure
 §4.1 exists to prevent.
 
+## 5.1 The cluster can no longer bootstrap itself, and Terraform must seed it
+
+**Found 2026-09-02, and it is the missing half of §5.** With
+`cluster.network.cni.name: none`, Talos stops rendering a CNI — and nothing else
+starts rendering one. Three consequences, in order of how fast they bite:
+
+- **The node is `NotReady`.** A node goes Ready only once a CNI is up.
+- **Talos does not wait patiently.** Bootstrap stalls in the high teens of its
+  phase sequence and **the node reboots to retry roughly every 10 minutes**.
+  There is no leisurely window between `terraform apply` and `flux bootstrap` in
+  which to install Cilium by hand.
+- **Flux cannot be the thing that fixes it.** Flux's controllers are ordinary
+  pods and need pod networking, so **Flux cannot install the CNI that Flux needs
+  in order to run**. This circularity is new: with Flannel, Talos rendered the
+  CNI itself, so the question never arose.
+
+**The seed goes in `cluster.inlineManifests`** — present in the v1.13.8 schema
+alongside `extraManifests`, applied by Talos during bootstrap, which is inside
+Terraform's window rather than Flux's. Sidero's own Cilium guide gives the
+constraint: put the inline manifest on **control-plane machine configs only**,
+and keep them identical across control planes.
+
+One property keeps this from becoming an ownership fight: **Talos only *creates*
+missing resources from inline manifests — it never updates or deletes them.**
+That is AGENT.md's bootstrap-manifest gotcha, and here it works in our favour.
+The inline manifest is a one-shot seed; the `HelmRelease` in
+`infrastructure/cilium/` owns Cilium from the moment Flux is up.
+
+**Seed the minimum.** The inline manifest has exactly one job: make nodes Ready
+so Flux can start. Leave `kubeProxyReplacement`, `autoDirectNodeRoutes` and the
+policy configuration to the `HelmRelease`. A minimal seed never needs to stay in
+sync with the chart; a full one would, and would rot silently — the seed is
+applied once and then never reconciled again.
+
+**This moves a layer boundary, and it should be recorded rather than absorbed.**
+Terraform's contract stops being *"an empty cluster"* and becomes *"a cluster
+with a CNI"*. In `golden-architecture.md` §5's terms that is an
+**Infrastructure → Fleet** leak, and every leak currently in that table points
+the other way. Its §7 rule says exactly what to do with it: put it in the table
+with its direction. This should also be the **only** such exception — no
+`kubernetes` provider, no `helm` provider, nothing else from `infrastructure/`
+pulled down into Terraform.
+
+Full sequencing in
+[terraform-on-bare-metal.md §5](terraform-on-bare-metal.md).
+
 ## 6. A later consolidation this unlocks
 
 Worth recording because it removes a component the fleet notes assume will be
@@ -149,12 +195,16 @@ value, not another component.
    one rebuild rather than forcing a second.
 2. Keep `ipam.mode: kubernetes` and the existing `k8sServiceHost`/`Port` — the
    pod network does not renumber and KubePrism is already correct.
-3. Delete `cni-configuration.yaml` and `allow-node-to-pods.yaml` **in the same
+3. **Add the `inlineManifests` Cilium seed to the machine config in the same
+   change** (§5.1). Without it the rebuilt node never reaches Ready and reboots
+   every ten minutes, and Flux cannot rescue it — this is not a follow-up item,
+   it is part of making the cluster come up at all.
+4. Delete `cni-configuration.yaml` and `allow-node-to-pods.yaml` **in the same
    change**, not as follow-ups. Both are chaining artefacts and both become
    actively misleading once Flannel is gone.
-4. Set `kubeProxy.enabled: false` in kube-prometheus-stack in the same change,
+5. Set `kubeProxy.enabled: false` in kube-prometheus-stack in the same change,
    and drop the `proxy.extraArgs` block from `talos.tf`.
-5. **Re-run the enforcement test** in `docs/networkpolicy-enforcement-notes.md`
+6. **Re-run the enforcement test** in `docs/networkpolicy-enforcement-notes.md`
    afterwards — the positive *and* negative case. Policy enforcement is the
    reason Cilium is here at all, and this change replaces the entire datapath
    underneath it. Include a probe-dependent workload under a default-deny, which

@@ -100,7 +100,8 @@ Two concrete gaps it closes immediately:
   `nfd-worker` 5m/64Mi per node. Fine — but **the chart's default *limits* are
   absurd for this fleet** (master 4Gi, worker 512Mi, gc 1Gi). Pin them down, in
   the repo's existing style of patching upstream defaults with a comment saying
-  why. On a 3.2Gi machine 2 an unbounded master would be the whole node.
+  why. On machine 2 (7.2Gi, upgraded from 3.2Gi) an unbounded 4Gi master would
+  be over half the node.
 - **Talos rough edges.** NFD runs on Talos, but kernel-module discovery reads
   `/host-lib/modules`, which Talos does not lay out like a conventional distro,
   and there is a known upstream issue about network-attribute error logs on Talos
@@ -170,7 +171,7 @@ THEN     ├─ RAM into machine 2 ───────────── hardw
          │  machine 1, single deliberate rebuild; unblocks machine 2's join
          │
          ├─ machine 2 joins as a WORKER ──── headless-talos-install.md §10
-         │  (etcd says so, and 3.2Gi said so too — until the RAM lands)
+         │  (etcd says so; the RAM landed — 7.2Gi — so only etcd says so now)
          │
 LATER    ├─ machine 3, matched to machine 2  ideally a Q-series chipset
          └─ Tinkerbell + netboot ─────────── §4, when reinstalls get routine

@@ -21,11 +21,11 @@ throughout. One is a laptop and one is a small-form-factor business desktop.
 | --- | --- | --- |
 | Model | Dell Inspiron 5770 (17.3" laptop) | Lenovo ThinkCentre M710e SFF |
 | CPU | 8th-gen Core U-series, 4 cores / 8 threads | **i3-7100, 2 cores / 4 threads** |
-| RAM | 15 GiB | **3.2 GiB** |
+| RAM | 15 GiB | **7.2 GiB** — 3.2 GiB when measured 2026-08-29, **upgraded since** |
 | Chipset | mobile (consumer) | **Intel B250** |
 | Disks | 128G SSD (`LITEON CV8-8E128`) + **931G 5400rpm 2.5" HDD** (`ST1000LM035`) | **one** — 477G SSD (`MTFDDAK512MAY`) |
 | Free bays | none (both occupied) | 3.5" + 2.5" + M.2 all free |
-| NIC | Gigabit Ethernet | Realtek PCIe GbE (`enp1s0`) |
+| NIC | **Realtek RTL810xE Fast Ethernet (100 Mbit), `enp2s0`, unplugged** — the machine runs on **Wi-Fi** (`wlp3s0`, QCA9377) | Realtek PCIe GbE (`enp1s0`) |
 | Firmware | — | UEFI, **Secure Boot enabled** |
 | Out-of-band mgmt | **none** | **none** |
 | Role today | Ubuntu + libvirt + the Talos VM | Ubuntu 26.04.1, awaiting the Talos wipe |
@@ -36,6 +36,19 @@ it over SSH on 2026-08-29. Machine 1's disks come from
 records them. The model names are the operator's, and they are consistent with
 everything measured: a `ST1000LM035` is a 2.5" laptop drive, which is why
 machine 1's "bulk" tier is 5400rpm in the first place.
+
+> **Machine 1's NIC row was wrong twice, corrected 2026-09-02 by measurement
+> over SSH.** It is not gigabit — the controller is a *Realtek RTL810xE PCI
+> Express **Fast** Ethernet* part, so 100 Mbit — and it is **not in use**:
+> `enp2s0` is `NO-CARRIER`, and `192.168.0.52` lives on `wlp3s0`. The platform,
+> the Tailscale subnet router and AGENT.md's SSH fallback all run over Wi-Fi.
+>
+> **Talos omits all 802.11 support from its kernel** (`siderolabs/talos#11185` is
+> the open request to add it as an extension, i.e. it does not exist), so **D20
+> cannot start on this machine until it is cabled** — and once cabled its address
+> changes, because the lease belongs to the wireless MAC. The 100 Mbit ceiling
+> then lands on Longhorn replication, whose own guidance puts latency ahead of
+> IOPS. Full consequences in `terraform-on-bare-metal.md` §0.
 
 **There is no machine 3.** D20 needs three for etcd quorum.
 
@@ -117,12 +130,12 @@ Verified. It does not hold.
 | | §10 assumed | Actual |
 | --- | --- | --- |
 | Machine 1 | 8 threads / 15Gi | 8 threads / 15Gi ✓ |
-| Machine 2 | 8 threads / 15Gi | **4 threads / 3.2Gi** |
+| Machine 2 | 8 threads / 15Gi | **4 threads / 7.2Gi** |
 | Machine 3 | 8 threads / 15Gi | does not exist |
-| **Fleet RAM** | **45Gi** | **18.2Gi** across two machines |
+| **Fleet RAM** | **45Gi** | **22.2Gi** across two machines |
 
 The budget concluded *"~16Gi of 45Gi"* for the platform and *"~25Gi left for
-applications"*. Against 18.2Gi there is no such headroom.
+applications"*. Against 22.2Gi there is no such headroom.
 
 **And the per-machine floor is the harder number.** D20 makes every machine a
 control plane *and* a Longhorn node. Taking §10's own per-machine figures and
@@ -136,9 +149,21 @@ dividing by three:
 | Longhorn instance manager | ~1.0Gi |
 | **Floor, before any workload** | **~2.9Gi** |
 
-**Machine 2 has 3.2Gi.** It would spend ~90% of its memory being a member of the
-cluster, leaving ~0.3Gi to do anything. It cannot be a D20 node as designed. This
-is the concrete version of what `multi-node-ha-design-notes.md` §3.1 already
+> **This paragraph was right, and has been overtaken by the fix it argued for.**
+> It read *"Machine 2 has 3.2Gi… it would spend ~90% of its memory being a member
+> of the cluster, leaving ~0.3Gi to do anything. It cannot be a D20 node as
+> designed."* That was true of the hardware at the time. **The operator upgraded
+> the RAM to 7.2Gi** before the Talos install (2026-09-02). The floor is now ~40%
+> of the machine, leaving ~4.3Gi for workloads: machine 2 **can** be a D20 node,
+> and can be a control plane.
+>
+> The fleet-level conclusion still stands — 22.2Gi across two machines is well
+> short of the 45Gi §10 assumed, and machine 3 still does not exist. What is
+> spent is the per-machine verdict on machine 2 and §7's RAM line item, because
+> **it was bought**. With that done, **the highest-leverage spend is machine 3**,
+> which etcd quorum requires and no component upgrade substitutes for.
+
+This was the concrete version of what `multi-node-ha-design-notes.md` §3.1
 called *"marginal for a control-plane node"* and what `headless-talos-install.md`
 §4 repeats — both were right, and neither had the arithmetic.
 
@@ -178,7 +203,7 @@ justification. The measured fleet is not that:
 
 | | Machine 1 | Machine 2 |
 | --- | --- | --- |
-| RAM | 15Gi | 3.2Gi (until upgraded) |
+| RAM | 15Gi | 7.2Gi |
 | Bulk storage | 931G HDD | none (until added) |
 | Survives mains loss | **yes** (battery) | no |
 | Remote power via plug | **no** (battery) | yes |
@@ -194,17 +219,32 @@ gives the uniform fleet the design already assumes.
 This also settles a smaller question by itself. `multi-node-ha-design-notes.md`
 already says machine 2 joins as a **worker** until machine 3 exists, because two
 control planes tolerate exactly as many failures as one. That was argued from
-etcd; the hardware now agrees for a second, independent reason — at 3.2Gi machine 2
-cannot afford to be a control plane anyway. **The two arguments converge on the
-same plan, which is a good sign it is the right one.**
+etcd. The second, independent reason this note gave — *"at 3.2Gi machine 2
+cannot afford to be a control plane anyway"* — **no longer applies**, because the
+RAM was upgraded. So the plan is unchanged but its support is narrower than it
+looked, and now rests on the etcd-quorum argument alone. That argument is
+sufficient and depends on no hardware fact, which is why the plan does not move
+when the hardware does.
 
 ## 7. What to buy, cheapest first
 
-1. **RAM for machine 2** — 2 × DDR4-2400 non-ECC UDIMM, to 16GB or 32GB. The
-   single highest-leverage item in D20 (§4). Do this before anything else.
-2. **A 3.5" HDD for machine 2**, if `bulk` is to be replicated at all (§5). The
+1. ~~**RAM for machine 2**~~ — **DONE, 2026-09-02.** Bought and fitted: the
+   machine went from 3.2Gi to **7.2Gi**, above the ~4Gi a control plane wants.
+   This was the list's top item and it worked; several judgements elsewhere in
+   this note and in `multi-node-ha-design-notes.md` were resting on the old
+   figure and are retired as a result.
+2. **An Ethernet cable for machine 1** — pennies, and required before machine 1
+   can be a Talos node at all. §1 records that machine 1 runs on **Wi-Fi**, and
+   **Talos has no 802.11 support at all**. It is no longer a blocker on *starting*
+   D20 — `machine-2-first-build-plan.md` builds the new cluster on machine 2
+   first — but machine 1 cannot join until it is cabled. If it
+   cannot be cabled where it sits, a USB gigabit adapter with a driver in the
+   Talos schematic is the fallback, and that is a decision to take *before* the
+   install. Note the built-in NIC is 100 Mbit, which lands on Longhorn
+   replication.
+3. **A 3.5" HDD for machine 2**, if `bulk` is to be replicated at all (§5). The
    bay is free.
-3. **A smart plug for machine 2 only**, if remote power is wanted later. It does
+4. **A smart plug for machine 2 only**, if remote power is wanted later. It does
    not work on machine 1 (§3), so buy one, not "one per machine". A per-outlet
    strip such as the Tapo P304M covers machines 2–4 from one device, and
    **Tinkerbell can drive it natively** — Rufio's `rpc` webhook provider plus a
@@ -212,12 +252,15 @@ same plan, which is a good sign it is the right one.**
    software work. Its per-outlet energy monitoring is also a real power source
    for the dark `node_rapl_*` panels (LES-97). See
    `docs/fleet/smart-plug-power-control.md`.
-4. **Machine 3, matched to machine 2**, when quorum is wanted. An SFF desktop of
+5. **Machine 3, matched to machine 2**, when quorum is wanted. **With the RAM
+   item struck, this is the highest-leverage spend in the plan** — etcd quorum
+   needs a third machine and no component upgrade substitutes for it. An SFF desktop of
    the same class, ideally with a **Q-series chipset** so the fleet finally gains
    out-of-band management and the Metal³/Tinkerbell BMC branches reopen (§2).
 
 Note what is *not* on this list: nothing software. Every constraint found here is
-answered by parts, and mostly by cheap ones.
+answered by parts, and mostly by cheap ones — the newest and most urgent of them
+is a network cable.
 
 ## 8. What this does not change
 

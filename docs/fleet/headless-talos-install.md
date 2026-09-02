@@ -14,6 +14,22 @@ Style and intent follow [headless-ubuntu.md](headless-ubuntu.md): every claim
 below was checked rather than recalled, and the failure modes that misreport
 their cause get their own call-outs. What is *not* verified is labelled as such.
 
+> **Status: EXECUTED 2026-09-02, via Route A (kexec).** The machine now runs
+> Talos v1.13.8 from its own SSD in maintenance mode, and its address moved to
+> **`192.168.0.221`** on the wipe (§0's `.220` is the *Ubuntu* address, correct
+> for the pre-install state and wrong for everything after). What the run
+> corrected is in
+> [machine-2-talos-install-record.md](machine-2-talos-install-record.md); those
+> corrections have since been applied in place here.
+>
+> **Read [terraform-on-bare-metal.md](terraform-on-bare-metal.md) before reusing
+> this for machine 1.** Two of its findings change the command lines below: an
+> `ip=` kernel argument removes the DHCP dependency entirely (§2.5), and
+> `talos.halt_if_installed=1` guards against booting media at an
+> already-installed machine. Its §0 also records that **machine 1 is on Wi-Fi and
+> Talos has no Wi-Fi**, so that machine must be cabled before any of this applies
+> to it.
+
 ---
 
 ## 0. What was measured on this machine
@@ -25,7 +41,7 @@ that matters to you; a stale fact here is worse than no fact.
 |---|---|
 | Host / address | `homelab-worker-0` at `192.168.0.220`, key access as `lestherll` |
 | OS | Ubuntu 26.04.1 LTS, kernel 7.0.0-30-generic |
-| CPU / RAM | i3-7100 (4 threads), **3.2 GiB** total, 2.7 GiB available |
+| CPU / RAM | i3-7100 (4 threads), **3.2 GiB** total, 2.7 GiB available — **correct on 2026-08-29; the RAM was upgraded before the install and the machine now has 7.2 GiB** |
 | Disk | **one** — `/dev/sda`, 476.9 G, model `MTFDDAK512MAY-1A`; `sda1` = 1 G ESP, `sda2` = 475.9 G root |
 | Firmware | **UEFI**, `/sys/firmware/efi` present |
 | NIC | `enp1s0`, MAC `f4:93:9f:f2:59:82`, Realtek PCIe GBE, DHCP from `192.168.0.1` |
@@ -199,14 +215,23 @@ disposable* PKI whose only job is to carry `machine.install` to the node, and
 
 ```bash
 cd ~/talos-worker0
-talosctl gen config homelab-worker-0-standalone https://192.168.0.220:6443 \
+talosctl gen config homelab-worker-0-standalone https://192.168.0.221:6443 \
   --output-types controlplane,talosconfig \
   --output . \
   --install-disk /dev/sda \
   --install-image ghcr.io/siderolabs/installer:v1.13.8 \
   --with-docs=false --with-examples=false \
-  --config-patch '{"machine":{"network":{"hostname":"homelab-worker-0"}}}'
+  --config-patch '{"apiVersion":"v1alpha1","kind":"HostnameConfig","auto":"off","hostname":"homelab-worker-0"}'
 ```
+
+> **The hostname patch is a separate document, corrected 2026-09-02.** This
+> said `{"machine":{"network":{"hostname":"..."}}}`. That v1alpha1 field is gone
+> in Talos v1.13 — hostname is its own `HostnameConfig` document, and
+> `talosctl gen config` **already emits one** with `auto: stable`. A patch
+> *merges* into the generated document rather than replacing it, so appending a
+> second one fails with `duplicate document`, and setting `hostname` without
+> `auto: "off"` fails with *"'auto' and 'hostname' cannot be set at the same
+> time"*. `talos.tf` carries the same trap and the same fix, at length.
 
 Three of those arguments carry real weight:
 
@@ -224,8 +249,14 @@ Three of those arguments carry real weight:
   flag, so the install targets the disk by identity rather than by position:
 
   ```
-  --config-patch '{"machine":{"install":{"diskSelector":{"match":"disk.model == '\''MTFDDAK512MAY-1A'\''"}}}}'
+  --config-patch '{"machine":{"install":{"diskSelector":{"model":"MTFDDAK512MAY-1A"}}}}'
   ```
+
+  > **Corrected 2026-09-02.** This said `{"match":"disk.model == '...'"}`. That
+  > CEL form belongs to `UserVolumeConfig`, and `talosctl gen config` on v1.13.8
+  > **rejects it outright** here — `machine.install.diskSelector` takes `model:`
+  > (and `size:`, `serial:`, …), not `match:`. The two selectors look alike and
+  > are not the same schema.
 
   This is also what the rest of the repo does — `talos.tf`'s `UserVolumeConfig`
   blocks select by `disk.serial` under the heading *"the cluster knows disk
@@ -252,8 +283,8 @@ Point the config at the node:
 
 ```bash
 export TALOSCONFIG=~/talos-worker0/talosconfig
-talosctl config endpoint 192.168.0.220
-talosctl config node 192.168.0.220
+talosctl config endpoint 192.168.0.221
+talosctl config node 192.168.0.221
 ```
 
 ### 2.4 Pre-flight the things that only fail later
@@ -276,9 +307,29 @@ A hang or a DNS error is the thing to fix now, not after the disk is gone.
   [talos-cutover-runbook.md](../talos-cutover-runbook.md).
 - Note the MAC, `f4:93:9f:f2:59:82`. It is the constant across the wipe and how
   you will find the machine afterwards.
-- If the router hands out `192.168.0.220` as a dynamic lease, **make it a
-  reservation now**. Talos will present the same MAC, so a reservation makes the
-  post-wipe address predictable instead of something you have to hunt for.
+- **Pin the post-wipe address.** This bullet used to say "make `192.168.0.220`
+  a DHCP reservation, Talos will present the same MAC". It was not done, and the
+  machine came back on **`.221`** — so every `192.168.0.220` written for the
+  post-wipe machine was wrong the moment it booted.
+
+  The reason is worth having: `DHCPv4Config.clientIdentifier` defaults to `mac`
+  on Talos, while Ubuntu's systemd-networkd sends a DUID-based RFC 4361
+  identifier. **The router saw two different clients on one MAC** and issued a
+  second lease. A MAC-keyed reservation genuinely would have held — the advice
+  was sound, it simply was not followed.
+
+  **The better answer needs no router at all:** put an `ip=` argument on the
+  kernel command line and skip DHCP for the whole maintenance window. Talos
+  documents it for exactly this — *"environments where DHCP doesn't provide IP
+  addresses… before loading machine configuration"*:
+
+  ```
+  ip=<addr>::<gateway>:24:<hostname>:enx<mac-no-colons>:off:1.1.1.1:9.9.9.9
+  ```
+
+  The `enx<mac>` device form keys the argument to the MAC rather than to `eth0`
+  surviving as an interface name. See
+  [terraform-on-bare-metal.md §2](terraform-on-bare-metal.md).
 - Remove `homelab-worker-0` from the Tailscale admin console once you commit.
   The wipe takes the node key with it, and the device otherwise sits in the
   tailnet as a permanently-offline ghost.
@@ -391,10 +442,11 @@ Then go to [§6](#6-verifying-blind).
   fix** — firmware re-POSTs everything, and since nothing was written to disk
   you land back in Ubuntu with nothing lost. If it happens twice, switch to
   Route B, which boots through firmware and does not have this failure mode.
-- **RAM.** Talos runs its root filesystem from memory. 3.2 GiB is comfortable
-  for maintenance mode, but it is the same 3.2 GiB that
-  [multi-node-ha-design-notes.md §3.1](multi-node-ha-design-notes.md) calls
-  marginal for a control-plane node later.
+- **RAM.** Talos runs its root filesystem from memory. This was written against
+  3.2 GiB, where it was merely comfortable for maintenance mode. **The machine
+  was since upgraded to 7.2 GiB**, which is ample here and also clears the
+  concern [multi-node-ha-design-notes.md §3.1](multi-node-ha-design-notes.md)
+  raised about it being marginal as a control plane.
 
 ---
 
@@ -531,7 +583,7 @@ Ubuntu is the exact inverse.
 
 ```bash
 nc -z -G 3 192.168.0.220 22    && echo "22 open — still Ubuntu"
-nc -z -G 3 192.168.0.220 50000 && echo "50000 open — Talos apid"
+nc -z -G 3 192.168.0.221 50000 && echo "50000 open — Talos apid"
 ```
 
 | 22 | 50000 | Meaning |
@@ -541,11 +593,23 @@ nc -z -G 3 192.168.0.220 50000 && echo "50000 open — Talos apid"
 | closed | closed | Something non-Ubuntu booted but `apid` is not serving. Give it two minutes; after that treat it as failed. |
 | open | open | Not a state this machine produces — check you are talking to the right host. |
 
+> **The table assumes one address, and that assumption did not hold.** Under
+> DHCP the machine changes address at exactly the moment it changes OS —
+> `.220` under Ubuntu, `.221` under Talos — because the two send different DHCP
+> client identifiers (see [§2.5](#25-before-the-wipe)). So the real observation
+> is *"22 closed at the old address, 50000 open at a new one"*, and the honest
+> reading of "closed / closed" is **"you may be probing the wrong address"**
+> before it is "apid is not serving". Find the machine with the `arp` command
+> above, which keys on the MAC and does not care what address it took.
+>
+> An `ip=` kernel argument removes the whole problem: the address does not move,
+> and this table becomes true as written.
+
 **3 — talosctl answers.** The proof, not just an inference:
 
 ```bash
-talosctl --nodes 192.168.0.220 --insecure version
-talosctl --nodes 192.168.0.220 --insecure get disks
+talosctl --nodes 192.168.0.221 --insecure version
+talosctl --nodes 192.168.0.221 --insecure get disks
 ```
 
 `version` should report the node at **v1.13.8**, matching the client. `get
@@ -586,7 +650,7 @@ maintenance mode.** That matters exactly once, in [§8](#8-installing-to-the-ssd
 Everything up to here is reversible with a power switch. This is the line.
 
 ```bash
-talosctl --nodes 192.168.0.220 --insecure get disks
+talosctl --nodes 192.168.0.221 --insecure get disks
 ```
 
 There is one disk **in this machine** and the model string is distinctive, so
@@ -607,7 +671,7 @@ further.
 ## 8. Installing to the SSD
 
 ```bash
-talosctl --nodes 192.168.0.220 --insecure apply-config \
+talosctl --nodes 192.168.0.221 --insecure apply-config \
   --file ~/talos-worker0/controlplane.yaml
 ```
 
@@ -628,7 +692,7 @@ What to watch, from the Mac:
 ```bash
 # port 50000 drops (reboot), then returns a few minutes later
 while true; do
-  nc -z -G 2 192.168.0.220 50000 && echo "$(date +%T) up" || echo "$(date +%T) down"
+  nc -z -G 2 192.168.0.221 50000 && echo "$(date +%T) up" || echo "$(date +%T) down"
   sleep 5
 done
 ```
@@ -687,7 +751,7 @@ boot assets, so the machine comes back up **from its own disk, in maintenance
 mode, holding nothing**:
 
 ```bash
-talosctl --nodes 192.168.0.220 reset \
+talosctl --nodes 192.168.0.221 reset \
   --system-labels-to-wipe STATE,EPHEMERAL \
   --graceful=false \
   --reboot
@@ -704,10 +768,10 @@ Verify, back to `--insecure` because there is no identity any more:
 
 ```bash
 unset TALOSCONFIG
-nc -z -G 3 192.168.0.220 22    || echo "22 closed — no Ubuntu"
-nc -z -G 3 192.168.0.220 50000 && echo "50000 open"
-talosctl --nodes 192.168.0.220 --insecure version   # v1.13.8, maintenance mode
-talosctl --nodes 192.168.0.220 --insecure get disks
+nc -z -G 3 192.168.0.221 22    || echo "22 closed — no Ubuntu"
+nc -z -G 3 192.168.0.221 50000 && echo "50000 open"
+talosctl --nodes 192.168.0.221 --insecure version   # v1.13.8, maintenance mode
+talosctl --nodes 192.168.0.221 --insecure get disks
 ```
 
 **Then power-cycle it once and re-run those checks.** This is the step that
@@ -781,7 +845,7 @@ install or upgrade, never by machine config alone.** If the extension is wanted,
 factory image (`factory.talos.dev/installer/<schematic-id>:v1.13.8`) rather than
 the plain `ghcr.io/siderolabs/installer:v1.13.8` — and the node needs an
 `ExtensionServiceConfig` carrying `TS_AUTHKEY`, plus **its tailnet address in
-`machine.certSANs`** alongside `192.168.0.220`, or every authenticated
+`machine.certSANs`** alongside `192.168.0.221`, or every authenticated
 `talosctl` call fails exactly as `talos.tf:122` describes.
 
 Decide it wrong and the cost is one more reinstall of this machine. That is not
@@ -800,13 +864,22 @@ secrets**. Those live SOPS-encrypted at
 PKI in talosctl's spelling, which exists precisely for this kind of out-of-band
 work (see the comment in `.sops.yaml`).
 
-**Do this on machine 1, not the Mac.** `sops` and the age key are there; the Mac
-has neither. Copying the age key over would spread D12's single root key onto a
-second device to save one SSH hop, which is a bad trade. Following AGENT.md's
-recipe:
+**Corrected 2026-09-02: the premise of this section was false.** It said *"`sops`
+and the age key are there; the Mac has neither"*, and argued against copying the
+key over. **Both are already on the Mac** —
+`~/Library/Application Support/sops/age/keys.txt`, holding the single recipient
+`age1qr7amd9…`, verified by decrypting both Talos secrets files. So the trade
+this paragraph warned about was already made, some time ago, and the
+recommendation was arguing against a state that exists.
+
+That is worth more than a factual fix: **D12's "single root key" is a claim about
+one key, not one device, and it is currently on at least two.** Whether that is
+acceptable is a real decision and it has never been taken deliberately. Until it
+is, this work runs fine from either machine; the recipe below is unchanged apart
+from where you run it. Following AGENT.md's recipe:
 
 ```bash
-# on machine 1
+# on machine 1, or on the Mac from a checkout — both have sops and the age key
 sops --decrypt terraform/clusters/homelab/talos-secrets.sops.yaml > /tmp/secrets.yaml
 ```
 
@@ -821,7 +894,7 @@ already be gone.
 ### 10.3 Generating the worker config
 
 ```bash
-# on machine 1, with /tmp/secrets.yaml present
+# with /tmp/secrets.yaml present
 talosctl gen config homelab https://<VIP>:6443 \
   --with-secrets /tmp/secrets.yaml \
   --output-types worker \
@@ -830,7 +903,8 @@ talosctl gen config homelab https://<VIP>:6443 \
   --install-image ghcr.io/siderolabs/installer:v1.13.8 \
   --kubernetes-version 1.36.2 \
   --with-docs=false --with-examples=false \
-  --config-patch '{"machine":{"certSANs":["192.168.0.220"],"kubelet":{"extraArgs":{"rotate-server-certificates":"true"}},"network":{"hostname":"talos-worker-01"}}}'
+  --config-patch '{"machine":{"certSANs":["192.168.0.221"],"kubelet":{"extraArgs":{"rotate-server-certificates":"true"}}}}' \
+  --config-patch '{"apiVersion":"v1alpha1","kind":"HostnameConfig","auto":"off","hostname":"talos-worker-01"}'
 ```
 
 The cluster name `homelab`, `--kubernetes-version 1.36.2` and the pinned
@@ -853,7 +927,7 @@ this command is the last point at which changing them is free.
 > - **`machine.certSANs`.** Talos issues the `apid` certificate covering only
 >   what it is told, plus loopback. Omit this and the cert carries `DNS:<hostname>,
 >   IP:127.0.0.1`, so every authenticated `talosctl` call to the node fails with
->   *"certificate is valid for 127.0.0.1, not 192.168.0.220"*. The verbatim
+>   *"certificate is valid for 127.0.0.1, not 192.168.0.221"*. The verbatim
 >   warning is at `talos.tf:122`, where it was learned the hard way — the
 >   equivalent failure made `talos_machine_bootstrap` **hang rather than error**.
 > - **`machine.kubelet.extraArgs.rotate-server-certificates`.** Without it the
@@ -876,7 +950,7 @@ The node is in maintenance mode, so this is the same insecure call as
 identity yet:
 
 ```bash
-talosctl --nodes 192.168.0.220 --insecure apply-config --file /tmp/worker0.yaml
+talosctl --nodes 192.168.0.221 --insecure apply-config --file /tmp/worker0.yaml
 ```
 
 **Do not run `talosctl bootstrap`.** It initialises etcd and is a control-plane
@@ -895,8 +969,8 @@ the trap disappears the moment there is a control plane on the same network.
 From machine 1, with the real `talosconfig`:
 
 ```bash
-talosctl --nodes 192.168.0.220 version          # authenticated now, not --insecure
-talosctl --nodes 192.168.0.220 dmesg | tail -50 # available now, unlike maintenance mode
+talosctl --nodes 192.168.0.221 version          # authenticated now, not --insecure
+talosctl --nodes 192.168.0.221 dmesg | tail -50 # available now, unlike maintenance mode
 kubectl get nodes -o wide                       # talos-worker-01 → Ready
 kubectl get csr                                 # kubelet-serving CSRs Approved,Issued
 kubectl -n kube-system get pods -o wide --field-selector spec.nodeName=talos-worker-01
@@ -941,7 +1015,7 @@ platform's assumptions are single-node ones.
 ### 10.7 Reaching it day to day
 
 Once joined there is nothing special about this node: `talosctl --nodes
-192.168.0.220` with the cluster talosconfig, and `kubectl` as usual. There is no
+192.168.0.221` with the cluster talosconfig, and `kubectl` as usual. There is no
 SSH and no shell, so `talosctl dmesg | logs | services | get | support` are the
 whole diagnostic surface — and now that the node has an identity, all of them
 work, which was not true in maintenance mode

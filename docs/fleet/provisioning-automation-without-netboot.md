@@ -188,5 +188,8 @@ exactly why deferring it was the right call.
 - `docs/adr/0001-single-model-talos-fleet.md` §1, §7 — one endpoint, `for_each`,
   and what Terraform owns
 - `docs/fleet/tinkerbell-investigation.md` §9 — where the node list goes later
+- `docs/fleet/install-media-and-reprovisioning-notes.md` — §2's rare-versus-recurring
+  argument worked out against the API surface: what actually still needs media, and
+  the delivery verdict that follows
 - `docs/fleet/smart-plug-power-control.md` — the remote-power half
 - `docs/fleet/talos-without-omni.md` — building the image locally
