@@ -1,0 +1,15 @@
+# Longhorn's manager, engine and instance-manager pods are privileged and
+# hostPath-mounting by nature — they are a block-storage data plane. Talos
+# enforces PodSecurity `baseline` cluster-wide, and baseline forbids all of
+# that, so this label is load-bearing rather than decorative.
+#
+# The failure mode if it is missing is the one AGENT.md warns about for
+# node-exporter: the HelmRelease times out on a DaemonSet with NO POD to
+# inspect, because admission rejected the pods before creation. `kubectl
+# describe ds` is where the real message is, not `kubectl get pods`.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: longhorn-system
+  labels:
+    pod-security.kubernetes.io/enforce: privileged

@@ -431,6 +431,24 @@ spec:
           namespace: ${schema.metadata.namespace}
         spec:
           replicas: 1
+          # Recreate, not the default RollingUpdate, and this became REQUIRED
+          # with the Longhorn cutover rather than being a preference.
+          #
+          # replicas: 1 + ReadWriteOnce + RollingUpdate worked on local-path for
+          # a reason that has now been removed. RWO means one NODE, not one pod,
+          # so two pods on the same node could share the claim; and the PV's
+          # node affinity welded the replacement onto that same machine anyway.
+          # A Longhorn volume has no such welding: the surge pod can schedule
+          # elsewhere, and the rollout then stalls on Multi-Attach with NOTHING
+          # on the Application naming the cause.
+          #
+          # Recreate costs a moment of downtime per rollout on a single-replica
+          # app, which is the correct trade for a stall that does not explain
+          # itself. Applied unconditionally rather than only when persistence is
+          # set: an Application can gain persistence later, and a strategy that
+          # silently becomes wrong on an unrelated edit is the worse failure.
+          strategy:
+            type: Recreate
           selector:
             matchLabels:
               app: ${schema.metadata.name}

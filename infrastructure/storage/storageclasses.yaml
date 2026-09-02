@@ -1,36 +1,34 @@
 # The three classes this platform offers. They are named for the guarantee, not
-# for the implementation — `local-path` was a provisioner, not a promise, and a
-# consumer choosing storage should be picking a service class the way it would
-# on a managed cloud, without knowing what backs it.
+# for the implementation — a consumer choosing storage should be picking a
+# service class the way it would on a managed cloud, without knowing what backs
+# it.
+#
+# THAT NAMING IS WHY D20 COST THE PLATFORM API ALMOST NOTHING. The
+# implementation underneath `fast` and `bulk` changed completely — local-path
+# directories on per-tier virtual disks became Longhorn volumes selected by disk
+# tag — and the class names, and therefore every PVC and every RGD that names
+# them, did not move. `rgd-database.yaml` still hardcodes `fast`;
+# `rgd-application.yaml` still enumerates both.
 #
 # StorageClasses cannot be renamed in place: `provisioner` and `reclaimPolicy`
 # are immutable, so the only migration path is create-new-and-move-every-volume.
-# Cutover recreates all three on a fresh cluster and restores from dumps, so the
-# rename is free on that day and a full storage migration on any day after it.
+# These are recreated on a fresh cluster, so the change is free on that day and
+# a full storage migration on any day after it.
 #
 # NOTE THERE IS NO DEFAULT CLASS, and that is deliberate. A PVC that names no
 # class stays Pending, loudly and immediately, instead of silently landing
-# somewhere wrong. Defaulting to `scratch` would mean a chart that omits
-# storageClassName silently gets Delete storage; defaulting to `fast` would put
-# every disposable PVC on the disk under the most contention. Every
-# PVC-producing site in this repo already names a class explicitly, so this
-# costs nothing today.
-#
-# All three are WaitForFirstConsumer: a local-path PV is a directory on one
-# specific node, so binding before the pod is scheduled would pin the pod to a
-# node chosen for no reason.
+# somewhere wrong. Longhorn's chart ships its own default class and it is turned
+# off (infrastructure/longhorn/) for exactly this reason.
 
 # --- scratch -----------------------------------------------------------------
-# Disposable, on the system disk, deleted with its claim.
+# Disposable, on the system disk, deleted with its claim. Still local-path, and
+# deliberately NOT Longhorn: platform-api-under-d20.md §3's "do not replicate
+# twice" — there is nothing here worth replicating, and a replicated disposable
+# volume is pure cost.
 #
-# The system disk is the one the VM's own lifecycle owns — a
-# `terraform destroy -target=module.cluster.libvirt_volume.system` throws it
-# away, and that targeted destroy is the routine rebuild primitive here, not an
-# emergency. So `scratch` means "this will not survive a VM rebuild", which is a
-# stronger statement than Delete-on-release alone.
-#
-# It also shares 20 GiB with etcd and every containerd image layer, so nothing
-# with an unbounded growth path belongs here.
+# WaitForFirstConsumer because a local-path PV is a directory on one specific
+# node, so binding before the pod is scheduled would pin the pod to a node
+# chosen for no reason.
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
@@ -44,35 +42,47 @@ volumeBindingMode: WaitForFirstConsumer
 # Durable that is not bulk sequential data: Postgres PGDATA, the SeaweedFS filer
 # index, the Prometheus TSDB.
 #
-# Backed by its own 20 GiB virtual disk on the SSD, attached by serial and
-# outliving the VM (verified end to end in the phase 2.5 rehearsal — see the
-# execution log in docs/talos-terraform-migration-notes.md). Retain, so a
-# deleted PVC orphans its data for manual cleanup rather than destroying it.
-#
-# The fixed size is a feature: AGENT.md's "local-path PVCs have no quota" still
-# holds *within* the volume, but a runaway now fills 20 GiB and stops, instead
-# of taking the node's root filesystem with it.
+# Selected by DISK TAG, never by node or path. That is what makes the class a
+# guarantee rather than an address: the tag currently resolves to a directory on
+# machine 2's single SSD, and when a machine with different disks joins, the tag
+# resolves there instead with nothing here changing.
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
   name: fast
-provisioner: homelab.local/fast
+provisioner: driver.longhorn.io
+# Retain, so a deleted PVC orphans its data for manual cleanup rather than
+# destroying it.
 reclaimPolicy: Retain
 volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+parameters:
+  numberOfReplicas: "1"
+  staleReplicaTimeout: "30"
+  diskSelector: "fast"
+  fsType: "ext4"
 ---
 # --- bulk --------------------------------------------------------------------
-# Durable, high-capacity, sequential. Backed by an image file on the 931G
-# 5400rpm spinning disk.
+# Durable, high-capacity, sequential. Use this for data that is large, grows
+# over time, and is read and written mostly sequentially — object storage
+# volumes being the motivating case. Do NOT use it for anything latency-bound.
 #
-# Use this for data that is large, grows over time, and is read and written
-# mostly sequentially — object storage volumes being the motivating case. Do NOT
-# use it for anything latency-bound: Postgres WAL fsyncs and Prometheus TSDB
-# compactions both behave badly on a 5400rpm drive, and both are small enough
-# that `fast` is the right home. See docs/storage-tiering-notes.md.
+# HONEST NOTE ON WHAT BACKS THIS TODAY: machine 2 has one SSD, so `bulk` and
+# `fast` are two tagged disks on the same device. An SSD OVER-delivers on bulk's
+# guarantee rather than under-delivering, so the contract holds — but the
+# sequential-vs-latency distinction that motivates the split is not physically
+# real until a machine with a spinning disk joins and its HDD is tagged `bulk`.
+# Longhorn then migrates bulk replicas onto it by tag.
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
   name: bulk
-provisioner: homelab.local/bulk
+provisioner: driver.longhorn.io
 reclaimPolicy: Retain
 volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+parameters:
+  numberOfReplicas: "1"
+  staleReplicaTimeout: "30"
+  diskSelector: "bulk"
+  fsType: "ext4"

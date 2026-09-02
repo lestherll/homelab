@@ -6,12 +6,17 @@ resources:
   # anything under here, so this has no dependency to wait on.
   - flux-notifications
   - sources
-  # Early, ahead of everything it protects: cilium chains onto Flannel to make
-  # NetworkPolicy actually enforce. Safe in this Kustomization rather than its
-  # own — a ConfigMap and a HelmRelease, no CRD for a cold apply's dry-run to
-  # trip over. Nothing here depends on it to come up, though: policy is
-  # additive, and a pod created before Cilium is running is unmanaged rather
-  # than blocked.
+  # Early, ahead of everything it protects. Cilium is now the ONLY CNI — it no
+  # longer chains onto Flannel, because Talos renders no Flannel and no
+  # kube-proxy. Safe in this Kustomization rather than its own: a single
+  # HelmRelease, no CRD for a cold apply's dry-run to trip over.
+  #
+  # NOTE the dependency here is now real in a way it was not under chaining.
+  # Cilium used to be additive — policy was additive, and a pod created before
+  # it was unmanaged rather than blocked. Now it owns routing and Services, so
+  # nothing runs until it does. What breaks the circularity is not this
+  # ordering but the inlineManifests seed in terraform/modules/talos-metal/,
+  # which puts a CNI on the node during bootstrap, before Flux exists at all.
   - cilium
   - metrics-server
   - tailscale-operator
@@ -21,6 +26,11 @@ resources:
   # pointer objects are created by the app repo's own CI (see app-registrar
   # below and docs/zero-touch-app-registration.md). A directory here named
   # after an application means that feature has regressed.
+  # Ahead of storage, which declares classes with provisioner
+  # driver.longhorn.io. The StorageClass objects themselves apply fine without
+  # it — a class naming an absent provisioner is accepted, and PVCs simply stay
+  # Pending — so this ordering is for coherence, not to avoid a deadlock.
+  - longhorn
   - storage
   - postgres
   - kro

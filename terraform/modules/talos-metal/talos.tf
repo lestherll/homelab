@@ -1,0 +1,231 @@
+# The Talos half on bare metal: preflight, machine config, apply, bootstrap.
+#
+# The PKI design is carried over from modules/talos-cluster/ UNCHANGED, and
+# terraform-on-bare-metal.md §1 is explicit that it must not be reopened:
+# secrets are generated out of band and SOPS-encrypted (that file is
+# authoritative), they enter as a variable rather than a talos_machine_secrets
+# resource, the rendered config is EPHEMERAL so it is never persisted, and it
+# reaches the provider through write-only (_wo) arguments. Terraform has no
+# state encryption at any version, so this is what keeps tfstate from becoming
+# a second root secret. D12's single root key survives the move to metal.
+#
+# What is NEW here, all four from terraform-on-bare-metal.md:
+#   §2  the address is static from the first apply; DHCP covers only the
+#       maintenance window
+#   §3  maintenance mode is two states, and apply-config never re-runs the
+#       installer — the image changes by `talosctl upgrade` only
+#   §4  the ordering edge libvirt used to provide (terraform_data below)
+#   §5  the Cilium seed, without which the cluster cannot bootstrap itself
+
+locals {
+  # Asserted rather than transformed — scripts/gen-talos-secrets.sh already
+  # writes the provider's key spelling, so a shape mismatch is a plan-time
+  # error instead of an apply-time one.
+  machine_secrets = var.machine_secrets
+
+  controlplane_node = one([for k, v in var.nodes : k if v.machine_type == "controlplane"])
+
+  # Longhorn's disk layout, delivered as a Node annotation from the machine
+  # config so it is present BEFORE Longhorn first registers the node. See
+  # variables.tf — this is the setting whose cost, if wrong, is a rebuild.
+  longhorn_disks_config = jsonencode(var.longhorn_disks)
+}
+
+# Gap four (§5): with cluster.network.cni.name=none the node is NotReady until
+# a CNI arrives, Talos reboots to retry every 10 minutes, and Flux cannot break
+# the circularity because its controllers are pods that need pod networking.
+# Talos applies inlineManifests during bootstrap — inside Terraform's window.
+locals {
+  cilium_seed = file("${path.module}/cilium-seed.yaml")
+
+  common_patches = [
+    yamlencode({
+      machine = {
+        # Generous on purpose. A MISSING certSAN does not fail cleanly:
+        # talos_machine_bootstrap HANGS, because the provider retries a
+        # failure that can never clear. Not rebuild-only, so adding one later
+        # is seconds — but paying that here costs nothing.
+        certSANs = concat(["127.0.0.1", "localhost"], var.extra_cert_sans)
+
+        nodeLabels = {
+          # Longhorn honours the annotation below only with this label set.
+          "node.longhorn.io/create-default-disk" = "config"
+        }
+        nodeAnnotations = {
+          "node.longhorn.io/default-disks-config" = local.longhorn_disks_config
+        }
+
+        kubelet = {
+          # Required by metrics-server, and this half ALONE DOES NOTHING: the
+          # other half is the kubelet-serving-cert-approver deployed beside it,
+          # because kube-controller-manager deliberately does not auto-approve
+          # kubelet-serving CSRs. Both halves or neither — otherwise the CSR
+          # sits Pending forever and the kubelet keeps its self-signed cert,
+          # which is the same symptom as not setting this at all.
+          extraArgs = {
+            rotate-server-certificates = "true"
+          }
+          # Longhorn's data paths must be visible to the kubelet, and rshared
+          # so volume mounts propagate.
+          extraMounts = [
+            for d in var.longhorn_disks : {
+              destination = d.path
+              type        = "bind"
+              source      = d.path
+              options     = ["bind", "rshared", "rw"]
+            }
+          ]
+        }
+      }
+      cluster = {
+        # Single node: without this every workload stays Pending forever
+        # against a control-plane taint nothing tolerates.
+        allowSchedulingOnControlPlanes = true
+
+        # Cilium-only (cilium-only-networking.md). Both of these are Talos
+        # BOOTSTRAP MANIFESTS and do not retrofit a running cluster — Talos
+        # re-renders, reports no error, and leaves live objects untouched. They
+        # land on a rebuild, which is why they must be right the first time.
+        network = { cni = { name = "none" } }
+        proxy   = { disabled = true }
+      }
+    }),
+  ]
+}
+
+# Gap three (§4): libvirt used to supply the ordering edge — talos.tf in the
+# sibling module carries `depends_on = [libvirt_domain.node]`, commented "the
+# domain has to be running and in maintenance mode before config can land." On
+# metal there is no resource to depend on.
+#
+# A BLIND WAIT is the shape of failure this repo has already paid for once (see
+# the certSANs note above, where the provider hung instead of erroring). So
+# this fails fast, with the address in the message.
+resource "terraform_data" "maintenance_ready" {
+  for_each = var.nodes
+
+  input = each.value.ip
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/sh", "-c"]
+    command     = <<-EOT
+      i=0
+      while [ $i -lt 60 ]; do
+        if nc -z -w2 ${each.value.ip} 50000 2>/dev/null; then exit 0; fi
+        i=$((i+1)); sleep 5
+      done
+      echo "not reachable on ${each.value.ip}:50000 after 5m — is ${each.key} powered on and in maintenance mode?" >&2
+      exit 1
+    EOT
+  }
+}
+
+ephemeral "talos_machine_configuration" "node" {
+  for_each = var.nodes
+
+  cluster_name       = var.cluster_name
+  cluster_endpoint   = "https://${var.cluster_endpoint_ip}:6443"
+  machine_type       = each.value.machine_type
+  machine_secrets    = local.machine_secrets
+  talos_version      = var.talos_version
+  kubernetes_version = var.kubernetes_version
+
+  config_patches = concat(
+    local.common_patches,
+    [
+      # Hostname is its OWN document in Talos v1.13, not a v1alpha1 field.
+      # `auto: off` is required, not decorative: a patch MERGES into the
+      # generated document, so the generated `auto: stable` survives and Talos
+      # rejects the pair with "'auto' and 'hostname' cannot be set at the same
+      # time". Neither `$patch: replace`, `auto: ""` nor `auto: null` work.
+      yamlencode({
+        apiVersion = "v1alpha1"
+        kind       = "HostnameConfig"
+        auto       = "off"
+        hostname   = each.key
+      }),
+      yamlencode({
+        machine = {
+          install = {
+            # §3: this does NOT re-run the installer on an already-installed
+            # node. Changing the installed image is `talosctl upgrade`.
+            image = var.install_image
+          }
+          certSANs = [each.value.ip]
+          network = {
+            # By MAC, never by name. An interfaces entry naming a device that
+            # does not exist is ignored SILENTLY, and the failure mode is a
+            # node that quietly stays on DHCP — indistinguishable from success
+            # until the lease moves.
+            interfaces = [{
+              deviceSelector = { hardwareAddr = each.value.mac }
+              addresses      = ["${each.value.ip}/${var.cidr_prefix}"]
+              routes = [{
+                network = "0.0.0.0/0"
+                gateway = var.gateway
+              }]
+            }]
+            nameservers = var.nameservers
+          }
+        }
+      }),
+    ],
+    # The seed goes on CONTROL-PLANE configs only, and identical across them —
+    # Sidero's own Cilium guide is explicit about both.
+    each.value.machine_type != "controlplane" ? [] : [
+      yamlencode({
+        cluster = {
+          inlineManifests = [{
+            name     = "cilium-seed"
+            contents = local.cilium_seed
+          }]
+        }
+      })
+    ],
+  )
+}
+
+ephemeral "talos_client_configuration" "cluster" {
+  cluster_name    = var.cluster_name
+  machine_secrets = local.machine_secrets
+  endpoints       = [var.cluster_endpoint_ip]
+  nodes           = [for k, v in var.nodes : v.ip]
+}
+
+resource "talos_machine_configuration_apply" "node" {
+  for_each = var.nodes
+
+  # _wo (write-only): sent to the provider, never recorded in state.
+  client_configuration_wo        = ephemeral.talos_client_configuration.cluster.client_configuration
+  machine_configuration_input_wo = ephemeral.talos_machine_configuration.node[each.key].machine_configuration
+  node                           = each.value.ip
+
+  # Returns the machine to maintenance mode on destroy, which restores the
+  # rehearsal property the VM had and bare metal otherwise loses. NOTE its
+  # caveat: a change to on_destroy must be applied BEFORE the destroy that
+  # relies on it.
+  on_destroy = {
+    reset    = true
+    graceful = false
+    reboot   = true
+  }
+
+  depends_on = [terraform_data.maintenance_ready]
+
+  timeouts = {
+    create = "10m"
+  }
+}
+
+# Exactly one node, exactly once, ever. The variable validation upstream is
+# what guarantees "one".
+resource "talos_machine_bootstrap" "cluster" {
+  client_configuration_wo = ephemeral.talos_client_configuration.cluster.client_configuration
+  node                    = var.nodes[local.controlplane_node].ip
+
+  depends_on = [talos_machine_configuration_apply.node]
+
+  timeouts = {
+    create = "10m"
+  }
+}

@@ -1,0 +1,90 @@
+# Longhorn — the block-storage data plane behind `fast` and `bulk`.
+#
+# It replaces the local-path provisioner instances that used to back those two
+# classes. `scratch` deliberately stays on local-path
+# (infrastructure/storage/): docs/fleet/platform-api-under-d20.md §3 says do
+# not replicate twice — CNPG replicates Postgres, SeaweedFS replicates objects,
+# and Longhorn replicating underneath both would be nine copies of the same
+# bytes. `scratch` is disposable by definition and has nothing to replicate.
+#
+# WHAT THIS CHANGES FOR APP AUTHORS, and it is the one semantic change in the
+# whole D20 migration: `persistence.size` stops being documentation and becomes
+# a real limit. AGENT.md's "these PVCs have no quota" was true of a hostPath
+# directory, where `df` inside a pod reported the whole tier. A Longhorn volume
+# is a real block device, so a claim for 5Gi gets 5Gi and a runaway hits ENOSPC
+# instead of eating the tier. That inverts the old failure mode rather than
+# softening it — see the SeaweedFS note in platform-api-under-d20.md §2.
+#
+# Chart version 1.12.1 (appVersion v1.12.1), latest on charts.longhorn.io as of
+# 2026-09-02. NOTE Talos v1.13.8 is off Longhorn's published verified matrix —
+# that is a known unknown this build exists partly to answer, not an oversight.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: longhorn
+  namespace: longhorn-system
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: longhorn
+      version: "1.12.1"
+      sourceRef:
+        kind: HelmRepository
+        name: longhorn
+        namespace: flux-system
+  install:
+    crds: Create
+  upgrade:
+    crds: CreateReplace
+  values:
+    defaultSettings:
+      # The node's disks are declared from the MACHINE CONFIG, as the
+      # node.longhorn.io/default-disks-config annotation
+      # (terraform/modules/talos-metal/). That is what guarantees both tags
+      # exist before Longhorn first registers the node — the annotation "only
+      # takes effect when there are no existing disks or tags on the node", so
+      # doing it afterwards is the UI forever, or a rebuild.
+      createDefaultDiskLabeledNodes: true
+
+      # Talos mounts /var/lib/longhorn via kubelet extraMounts; anywhere else
+      # is a read-only squashfs.
+      defaultDataPath: /var/lib/longhorn
+
+      # Single node today. Machine 1 joins as a worker later, at which point
+      # this becomes a real choice rather than a constraint.
+      defaultReplicaCount: 1
+
+      # Do not let Longhorn schedule replicas onto the disk holding the OS
+      # beyond what the tags say.
+      storageMinimalAvailablePercentage: 15
+
+      # The two guarantees are distinguished by DISK TAG, not by node, because
+      # both tags currently live on the same SSD.
+      #
+      # This is the invariant working as designed: classes name guarantees, not
+      # devices (golden-architecture.md §3), and an SSD OVER-delivers on bulk's
+      # guarantee. When machine 1 joins, tag its HDD `bulk` and Longhorn
+      # migrates bulk replicas onto it by tag — no Platform API change, no PVC
+      # rewrite, no app aware anything happened.
+      defaultLonghornStaticStorageClass: fast
+
+    # Longhorn ships its own default StorageClass. Disable it: this repo's
+    # classes are declared in infrastructure/storage/storageclasses.yaml, and
+    # NO class here is default on purpose — a PVC naming none must stay Pending
+    # loudly rather than land somewhere wrong.
+    persistence:
+      defaultClass: false
+      defaultClassReplicaCount: 1
+
+    longhornUI:
+      replicas: 1
+
+    # Footprint stated explicitly so a chart bump cannot change it invisibly.
+    # Machine 2 has ~7.2 GiB total and the platform does not fit like-for-like
+    # (machine-2-first-build-plan.md §3), so every component's cost is a
+    # decision here rather than a default.
+    longhornManager:
+      resources:
+        requests: { cpu: 50m, memory: 128Mi }
+        limits: { cpu: 500m, memory: 512Mi }

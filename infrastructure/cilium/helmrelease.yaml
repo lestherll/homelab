@@ -1,22 +1,22 @@
-# Cilium, installed ONLY to enforce NetworkPolicy.
+# Cilium — the only CNI, and the only thing programming Services.
 #
-# Before this existed, every NetworkPolicy on this cluster was inert — accepted
-# by the API server, listed by `kubectl get netpol`, enforcing nothing, with no
-# signal anywhere that it was a no-op. The cause is the CNI: Talos defaults to
-# Flannel, which implements pod networking and has no policy backend. Do not
-# read a NetworkPolicy manifest predating this component as evidence that
-# anything was ever enforced.
+# It arrived for one reason: Talos defaults to Flannel, Flannel has no policy
+# backend, so every NetworkPolicy in this repo was inert until Cilium landed
+# (docs/networkpolicy-enforcement-notes.md). Do not read a NetworkPolicy
+# manifest predating that as evidence anything was ever enforced.
 #
-# This is CNI *chaining*, not a CNI replacement. Flannel keeps routing, IPAM and
-# masquerading; Cilium attaches eBPF programs to the veths Flannel creates and
-# does policy and observability only. Replacing Flannel outright was rejected:
-# the no-downtime procedure needs two node pools to drain across, and on a
-# single node it means `cluster.network.cni.name: none`, a NotReady node, and a
-# ten-minute window to land Cilium before the kubelet gives up — a real chance
-# of a rebuild, to enforce a handful of ingress rules.
+# It ran in generic-veth CHAINING mode over Flannel until D20. It no longer
+# does: Talos renders no CNI and no kube-proxy, and this replaces both. That
+# was a net deletion — two Talos-managed components gone, two files in this
+# directory gone, and a ~35-line kube-proxy metrics workaround gone from the
+# Terraform module.
 #
-# Because it chains, this needs NO Talos machine-config change and no reboot:
-# it lands via Flux like any other component.
+# CAVEAT that outlives the change: cluster.network.cni.name and
+# cluster.proxy.disabled are Talos BOOTSTRAP MANIFESTS, and AGENT.md records
+# that those do not retrofit a running cluster — Talos re-renders them, reports
+# no error, and leaves the live objects untouched. They landed on the machine 2
+# build because that was a fresh bootstrap. Changing them again means a
+# rebuild, not an apply.
 #
 # Chart version re-verified against https://helm.cilium.io/index.yaml as of
 # 2026-08-17: 1.20.0 (appVersion 1.20.0).
@@ -41,44 +41,36 @@ spec:
         name: cilium
         namespace: flux-system
   values:
-    # --- Chaining ------------------------------------------------------------
-    cni:
-      chainingMode: generic-veth
-      # Write infrastructure/cilium/cni-configuration.yaml's conflist rather
-      # than generating one. Both settings are needed; `customConf` alone with
-      # no `configMap` leaves the node with no CNI config at all.
-      customConf: true
-      configMap: cni-configuration
-      install: true
-      # The chart defaults this to `true`, which renames every non-Cilium
-      # conflist on the node to `*.cilium_bak` so nothing can be scheduled on
-      # another plugin while the agent is down. That guarantee is already had
-      # here for free — kubelet takes the lexically first conflist, which is
-      # always Cilium's `05-`, so with the agent down pod creation fails closed
-      # rather than falling back to plain Flannel.
-      #
-      # What `true` would additionally cost is the way back. There is no shell
-      # on a Talos node, so a bad Cilium plus a renamed Flannel config is a
-      # single-node cluster that cannot create the pod you would fix it with.
-      # Leaving Flannel's conflist in place makes recovery "delete one file".
-      exclusive: false
-    # Flannel already assigned the pod its address by the time cilium-cni runs,
-    # so Cilium's IPAM is only deciding what CIDR it believes the node owns.
-    # `kubernetes` reads node.spec.podCIDR — the same 10.244.0.0/24 Flannel
-    # uses. The chart default, `cluster-pool`, would instead have Cilium carve
-    # its own range out of 10.0.0.0/8 and give cilium_host an address from it,
-    # disagreeing with Flannel about the entire pod network.
+    # --- Datapath ------------------------------------------------------------
+    # Cilium is the ONLY CNI here. Talos renders neither Flannel nor kube-proxy
+    # (cluster.network.cni.name=none, cluster.proxy.disabled=true in
+    # terraform/modules/talos-metal/), so there is nothing to chain onto and
+    # nothing programming Services but this.
+    #
+    # THE TRADE, stated because it is easy to inherit without noticing: Cilium
+    # used to be additive — if it failed, Flannel's conflist was still on disk
+    # and the cluster kept routing without policy enforcement. That fallback is
+    # gone. A Cilium failure is now a total network failure, and because
+    # kubeProxyReplacement also puts Service routing in its datapath, that
+    # includes pods reaching the API server. KubePrism keeps the NODE's path to
+    # the API server independent, which is what still makes recovery possible.
+    # One component that must work, instead of three that must agree.
     ipam:
       mode: kubernetes
     routingMode: native
-    # Flannel masquerades. Two components doing it double-NATs egress.
-    enableIPv4Masquerade: false
+    # Valid because D20 puts every machine on one bridged LAN, so nodes are
+    # L2-adjacent and pod traffic routes directly with no overlay. If that ever
+    # stops being true the fallback is tunnel mode — one value, not a redesign.
+    autoDirectNodeRoutes: true
+    # Must agree with the pod CIDR Talos hands out via ipam.mode=kubernetes.
+    ipv4NativeRoutingCIDR: 10.244.0.0/16
+    # Cilium masquerades now. Under chaining this was false because Flannel did
+    # it, and two components doing it double-NATs egress.
+    enableIPv4Masquerade: true
     enableIPv6Masquerade: false
-    # kube-proxy stays. Restated rather than left at the default because the
-    # Talos install guide everyone copies sets this to `true`, and doing that
-    # here would have Cilium take over Services while kube-proxy is still
-    # programming rules for them.
-    kubeProxyReplacement: false
+    # Replaces kube-proxy outright. This is what lets cluster.proxy.disabled
+    # be true; the two settings are one decision made in two files.
+    kubeProxyReplacement: true
 
     # --- Talos constraints ---------------------------------------------------
     # Talos forbids workloads mounting cgroups; the host already has cgroup v2
@@ -87,11 +79,6 @@ spec:
       autoMount:
         enabled: false
       hostRoot: /sys/fs/cgroup
-    bpf:
-      # Talos forwards kube-dns to the host resolver, which eBPF host-routing
-      # bypasses. Without this, DNS from pods breaks in a way that looks like
-      # every workload failing at once.
-      hostLegacyRouting: true
     securityContext:
       capabilities:
         # The chart defaults verbatim, minus SYS_MODULE: Talos does not let a

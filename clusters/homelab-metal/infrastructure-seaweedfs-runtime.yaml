@@ -1,0 +1,39 @@
+# Separate from the root `infrastructure` Kustomization on purpose — this is
+# the fix for a real deadlock hit on the first cold apply of PR #18.
+#
+# infrastructure/seaweedfs-runtime/ contains raw manifests (a Seaweed CR, a
+# ResourceReferenceGrant, PodMonitors) whose CRDs are installed by the
+# seaweedfs-operator HelmRelease in infrastructure/seaweedfs/ — which itself
+# only gets applied BY the root `infrastructure` Kustomization. Flux's
+# kustomize-controller dry-run-validates every raw manifest's GVK before
+# applying anything in a Kustomization; on a cold cluster the
+# ResourceReferenceGrant's CRD doesn't exist yet, so that dry-run fails —
+# and it failed the ENTIRE `infrastructure` Kustomization, not just this one
+# resource, blocking every other component under infrastructure/ (kro,
+# platform-api, observability, everything) on every 10-minute retry, because
+# the one HelmRelease that would eventually install the missing CRD was
+# itself never reached.
+#
+# CNPG never hit this because the CR that needs its CRD (a `Cluster`) lives
+# in each app's own separately-reconciled Kustomization, never in the same
+# batch as the cnpg HelmRelease. seaweedfs-runtime's resources are
+# platform-owned, not per-app, so there's no app repo to push them into —
+# this is the equivalent split, done in this repo instead.
+#
+# dependsOn ensures this only reconciles after the root Kustomization
+# (which applies the seaweedfs-operator HelmRelease) is itself healthy, so
+# the CRD has a real chance to exist before this one's dry-run runs.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: infrastructure-seaweedfs-runtime
+  namespace: flux-system
+spec:
+  interval: 10m
+  path: ./infrastructure/seaweedfs-runtime
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  dependsOn:
+    - name: infrastructure

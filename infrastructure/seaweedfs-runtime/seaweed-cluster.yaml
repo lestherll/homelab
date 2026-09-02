@@ -91,16 +91,33 @@ spec:
     # Sized 2026-08-21: steady state 1m / 30Mi, 2d peak 3m / 52Mi. The
     # memory limit is deliberately far above that, because this is the one
     # component whose footprint tracks stored data — the needle index is
-    # held in memory, so it grows with object count, and at
-    # volumeSizeLimitMB: 100 against the bulk tier there is room for ~1000
-    # volume containers. 512Mi is a ceiling that stops a runaway from taking
+    # held in memory, so it grows with object count. 512Mi is a ceiling that
+    # stops a runaway from taking
     # the node, not a prediction; revisit it when real objects land, since
     # today's 52Mi peak is measured against an essentially empty cluster.
     # Note the cap's failure mode: this is the sole replica of every stored
     # object, so index growth past the limit is an OOMKill of the only copy,
     # not a throttle. Nothing alerts on approaching it today (LES-126).
     requests:
-      storage: 5Gi
+      # RESIZED WITH THE LONGHORN CUTOVER, and it had to move in the same
+      # change rather than as a follow-up.
+      #
+      # volumeSizeLimitMB: 100 sizes writable slots off the backing
+      # filesystem's FREE SPACE. Under local-path that was the whole bulk tier
+      # — roughly 100 GiB, hence the "~1000 volume containers" this comment
+      # used to claim — because a hostPath PV reported the host filesystem and
+      # the 5Gi request was documentation. A Longhorn volume is a real block
+      # device, so the arithmetic runs against the request instead: 5Gi would
+      # have meant ~50 slots, not ~1000.
+      #
+      # The failure that would cause is the one already root-caused live once:
+      # "No writable volumes and no free volumes left", surfacing as a 500 from
+      # the S3 API that does not read as a capacity problem at all.
+      #
+      # 20Gi gives ~200 slots, which is ample here and honest about the disk it
+      # sits on. Raise it, or lower volumeSizeLimitMB, before object count gets
+      # near that.
+      storage: 20Gi
       cpu: 25m
       memory: 64Mi
     limits:

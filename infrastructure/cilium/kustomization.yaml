@@ -3,12 +3,24 @@ kind: Kustomization
 resources:
   # No namespace.yaml — kube-system is created by Talos, and is the one
   # namespace exempt from its PodSecurity enforcement. See helmrelease.yaml.
-  - cni-configuration.yaml
+  #
+  # cni-configuration.yaml and allow-node-to-pods.yaml were DELETED with the
+  # move to Cilium-only, and both deletions were predicted in the files
+  # themselves:
+  #
+  #   cni-configuration.yaml held a byte-for-byte copy of Flannel's conflist
+  #   that had to stay in sync with it. With no Flannel there is no conflist to
+  #   shadow.
+  #
+  #   allow-node-to-pods.yaml existed ONLY because chaining misclassified the
+  #   kubelet's probes: Cilium did not own Flannel's bridge, so probes from
+  #   cni0 were classified `world` rather than `host`. Its own farewell note
+  #   said "if Flannel is ever replaced by Cilium outright, this becomes
+  #   unnecessary — Cilium would own the bridge. Delete it then, and re-run a
+  #   probe-dependent workload under a default-deny to confirm."
+  #
+  # That confirmation is still owed: re-run the positive AND negative test in
+  # docs/networkpolicy-enforcement-notes.md, including a probed workload under
+  # a default-deny. Policy enforcement is the only reason Cilium is here, and
+  # this change replaced the entire datapath underneath it.
   - helmrelease.yaml
-  # A CiliumClusterwideNetworkPolicy, so its CRD comes from the HelmRelease
-  # directly above it. That is normally the cold-apply deadlock this repo splits
-  # Kustomizations to avoid (see seaweedfs-runtime/) — it is tolerable here only
-  # because the policy is an *allow* with nothing depending on it at apply time:
-  # on a cold cluster it fails, retries, and succeeds once the CRD exists, and
-  # nothing is broken in between because no deny is in force yet either.
-  - allow-node-to-pods.yaml

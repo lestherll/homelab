@@ -1,0 +1,37 @@
+# The BARE-METAL cluster's entrypoint (machine 2, homelab-worker-0). A sibling
+# of clusters/homelab/, not a replacement — both exist until cutover, because
+# keeping the VM cluster reconcilable is what makes the rollback free
+# (machine-2-first-build-plan.md §4.2, §6).
+#
+# WHY A SECOND ENTRYPOINT AT ALL: bootstrapping a second cluster against
+# clusters/homelab/ would make both clusters reconcile the same manifests AND
+# contend for the same tailnet hostnames — and recreating a Tailscale exposure
+# burns a Let's Encrypt certificate (AGENT.md). Cheap to separate now,
+# unpleasant to unpick later.
+#
+# WHAT THIS DOES NOT SEPARATE, and it matters: both entrypoints point at the
+# SAME ./infrastructure tree. So a D20 change to infrastructure/ reaches the VM
+# cluster too, on its next reconcile. That is a deliberate, accepted
+# consequence here rather than an oversight — the VM cluster's storage and CNI
+# both change underneath it — and it is the reason the tailnet hostname was
+# renamed rather than duplicated. Retire clusters/homelab/ at cutover.
+#
+# Committed after `flux bootstrap` (which generates
+# clusters/homelab-metal/flux-system/ and is picked up automatically by its
+# root Kustomization). Do not hand-edit flux-system/.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: infrastructure
+  namespace: flux-system
+spec:
+  interval: 10m
+  path: ./infrastructure
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age

@@ -9,3 +9,4 @@ resources:
   - helmrepository-victoria-metrics.yaml
   - helmrepository-metrics-server.yaml
   - helmrepository-cilium.yaml
+  - helmrepository-longhorn.yaml

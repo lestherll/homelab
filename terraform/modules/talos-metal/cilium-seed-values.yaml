@@ -1,0 +1,46 @@
+# Minimal seed only. The Flux HelmRelease owns the real configuration
+# thereafter; Talos never updates an inline manifest it already created.
+ipam:
+  mode: kubernetes
+routingMode: native
+autoDirectNodeRoutes: true
+ipv4NativeRoutingCIDR: 10.244.0.0/16
+enableIPv4Masquerade: true
+enableIPv6Masquerade: false
+kubeProxyReplacement: true
+# KubePrism — Cilium must reach the apiserver before it can replace the
+# Service that would let it reach the apiserver.
+k8sServiceHost: localhost
+k8sServicePort: 7445
+# Talos: cgroup v2 is already mounted, and the agent must not try to mount it.
+cgroup:
+  autoMount:
+    enabled: false
+  hostRoot: /sys/fs/cgroup
+securityContext:
+  capabilities:
+    ciliumAgent:
+      - CHOWN
+      - KILL
+      - NET_ADMIN
+      - NET_RAW
+      - IPC_LOCK
+      - SYS_ADMIN
+      - SYS_RESOURCE
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    cleanCiliumState:
+      - NET_ADMIN
+      - SYS_ADMIN
+      - SYS_RESOURCE
+operator:
+  replicas: 1
+# Hubble off in the SEED only. `helm template` mints a Cilium CA and Hubble
+# server certs when it is on, i.e. real private keys, which must never be
+# committed. The Flux HelmRelease turns Hubble on with its own generated certs.
+hubble:
+  enabled: false
+  tls:
+    enabled: false

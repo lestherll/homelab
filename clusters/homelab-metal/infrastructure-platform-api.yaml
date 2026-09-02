@@ -1,0 +1,40 @@
+# Separate from the root `infrastructure` Kustomization for the same reason
+# infrastructure-seaweedfs-runtime is, and hit for real on the first cold apply
+# of the Talos cluster.
+#
+# infrastructure/platform-api/ contains three ResourceGraphDefinitions
+# (kro.run/v1alpha1), whose CRD is installed by the kro HelmRelease in
+# infrastructure/kro/ — which itself only gets applied BY the root
+# `infrastructure` Kustomization. kustomize-controller dry-run-validates every
+# raw manifest's GVK before applying anything, so on a cold cluster the RGDs'
+# dry-run fails with `no matches for kind "ResourceGraphDefinition"`, and that
+# failed the ENTIRE `infrastructure` Kustomization — no namespaces beyond the
+# first batch, no HelmReleases at all, including the kro one that would have
+# installed the missing CRD. Deadlocked on every 10-minute retry.
+#
+# PR #18 predicted this failure by name when it split seaweedfs-runtime out
+# ("blocking every other component under infrastructure/ (kro, platform-api,
+# everything)") but only moved seaweedfs-runtime. platform-api never showed it
+# because k3s had been running kro since long before, so its CRDs already
+# existed on every apply — the deadlock needs a genuinely empty cluster to
+# appear, which the Talos cutover was the first to provide.
+#
+# dependsOn gates this on the root Kustomization applying cleanly, which is
+# what gets the kro HelmRelease created. If kro's chart has not finished
+# installing by the time this first reconciles, this Kustomization alone
+# retries and the rest of the platform is unaffected — which is the whole
+# point of the split.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: infrastructure-platform-api
+  namespace: flux-system
+spec:
+  interval: 10m
+  path: ./infrastructure/platform-api
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  dependsOn:
+    - name: infrastructure

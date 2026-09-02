@@ -16,23 +16,39 @@ spec:
         name: prometheus-community
         namespace: flux-system
   values:
+    # kube-proxy DOES NOT EXIST on this cluster — Cilium replaced it
+    # (cluster.proxy.disabled=true). The chart ships this ServiceMonitor
+    # enabled by default, so leaving it on means one permanently-down target
+    # and KubeProxyDown/TargetDown firing forever.
+    #
+    # This one line REPLACES the ~35-line `proxy.extraArgs.metrics-bind-address`
+    # workaround that used to live in the Terraform module — a hack that carried
+    # its own "does not retrofit a running cluster" caveat. Deleting a
+    # workaround is the better half of this migration.
+    kubeProxy:
+      enabled: false
     prometheus:
       prometheusSpec:
         # Deliberate reduction from the current podman stack's 30d, to fit
         # D7's ~20%/~3GB budget with headroom for Loki's later addition.
-        retention: 15d
-        # retention (time) alone does not bound disk use, and the 10Gi below is
-        # decorative: the provisioner hands out a plain hostPath directory with
-        # no quota, so `df` inside the pod reports the whole `fast` filesystem.
-        # Left unbounded, a cardinality spike fills that volume and every other
-        # durable claim on it rather than dropping the oldest blocks. Set below
-        # the claim so Prometheus compacts against its own limit first.
+        # Cut from 15d for machine 2. The platform does not fit like-for-like
+        # there — 6287 Mi measured against 7.2 GiB total — and observability is
+        # where nearly all the slack is, almost all of it Prometheus
+        # (machine-2-first-build-plan.md §3). This is the sizing that §3 says
+        # to do BEFORE the build rather than after Prometheus is OOMKilled.
+        retention: 7d
+        # THE ADVICE THIS REPLACES WAS CORRECT AND IS NOW WRONG. It read: "the
+        # 10Gi below is decorative — the provisioner hands out a plain hostPath
+        # directory with no quota, so `df` inside the pod reports the whole
+        # filesystem." That was true of local-path. Under Longhorn the claim is
+        # a real block device, so the volume size IS the limit and a full
+        # volume is ENOSPC rather than a neighbour's outage.
         #
-        # 8GiB against a 20 GiB volume shared with Postgres and the SeaweedFS
-        # filer is the tightest this number has been — it was sized when the
-        # backing disk was a 106G SSD. Revisit it, not the volume, if the tier
-        # gets crowded.
-        retentionSize: 8GiB
+        # retentionSize still earns its place, and for a better reason than
+        # before: it makes Prometheus compact against its own budget and drop
+        # the oldest blocks, instead of discovering the ceiling as a write
+        # failure. Keep it below the claim.
+        retentionSize: 3GiB
         # Re-sized 2026-08-12, after the kubelet cardinality drop halved active
         # series (155,621 -> 80,475). Memory tracks head series, so the old
         # 1400Mi was sized against a TSDB that no longer exists: observed
@@ -46,9 +62,13 @@ spec:
         # CFS periods. Throttling a bursty workload stretches wall-clock time
         # without showing up as high average usage — the same trap as
         # node-exporter below, just less severe.
+        # Re-sized for machine 2's 7.2 GiB. The observed ceiling was 607Mi on a
+        # cluster holding 15d; at 7d retention and a smaller series count the
+        # head is smaller, and 768Mi keeps ~1.3x headroom over the old ceiling.
+        # Raise this before raising retention if the two ever compete.
         resources:
-          requests: { cpu: 200m, memory: 512Mi }
-          limits: { cpu: 750m, memory: 1024Mi }
+          requests: { cpu: 200m, memory: 384Mi }
+          limits: { cpu: 750m, memory: 768Mi }
         storageSpec:
           volumeClaimTemplate:
             spec:
@@ -63,9 +83,10 @@ spec:
               accessModes: ["ReadWriteOnce"]
               resources:
                 requests:
-                  storage: 10Gi
+                  # A REAL limit now, not documentation — see retentionSize.
+                  storage: 5Gi
         # Ships power metrics to the long-term store (infrastructure/
-        # victoria-metrics), because the `retention: 15d` above is global and
+        # victoria-metrics), because the `retention: 7d` above is global and
         # energy-cost tracking spans billing periods. Nothing else here changes:
         # Prometheus remains the primary store for everything, this is a copy of
         # a handful of series that need to outlive its window.
