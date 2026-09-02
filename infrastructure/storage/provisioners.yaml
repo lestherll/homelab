@@ -1,24 +1,29 @@
-# The three local-path-provisioner instances that back this cluster's three
-# StorageClasses. Talos ships no storage provisioner, so the repo owns every
-# instance — which is what makes it possible to put each class on a different
-# disk: an instance claims only the StorageClasses whose `provisioner:` field
-# matches its own --provisioner-name, so three instances with three names
-# partition the claims cleanly. One instance with one nodePathMap could only
-# ever serve one disk.
+# The ONE local-path-provisioner instance left, backing `scratch` alone.
 #
-# What differs between the three is exactly two things: --provisioner-name and
-# the nodePathMap path. Everything else — image, RBAC identity, helper pod,
-# setup/teardown scripts, resource envelope — is deliberately identical, so that
-# the classes differ in the guarantee they offer and in nothing else.
+# There used to be three, one per class, so that each class could sit on a
+# different disk — an instance claims only the StorageClasses whose
+# `provisioner:` field matches its own --provisioner-name, so three names
+# partitioned the claims cleanly.
 #
-# The `node:` key is the real node name rather than
-# DEFAULT_PATH_FOR_NON_LISTED_NODES. Under Talos the mount path is identical on
-# every node by construction (it comes from UserVolumeConfig in the machine
-# config, not from an imperative Ansible assert), so the default-path escape
-# hatch is no longer protecting against anything — but it *would* silently give
-# a node whose machine config omits the volume a directory on its system disk.
-# Naming the node turns that into a Pending PVC instead. Harmless while every
-# cluster here is single-node; load-bearing the day one grows.
+# `fast` and `bulk` moved to Longhorn with D20 (infrastructure/longhorn/), which
+# does that partitioning by DISK TAG instead and does it better: a tag can move
+# to another machine's disk without any consumer knowing. `scratch` deliberately
+# stayed behind — platform-api-under-d20.md §3's "do not replicate twice", and
+# there is nothing in a disposable volume worth replicating.
+#
+# The `node:` key is DEFAULT_PATH_FOR_NON_LISTED_NODES, and that reversed a
+# deliberate earlier choice. It used to name the real node, to stop a machine
+# whose config omitted a UserVolumeConfig from silently getting a directory on
+# its system disk — a Pending PVC being the better failure. That argument was
+# about `fast` and `bulk`, which no longer live here. `scratch`'s path is on the
+# EPHEMERAL partition, which every Talos node has by construction and no machine
+# config can omit, so there is nothing left to guard against and naming a node
+# would only mean editing this file every time the fleet grows.
+#
+# Note the sentinel is the literal string DEFAULT_PATH_FOR_NON_LISTED_NODES.
+# "DEFAULT" is not it, and the provisioner rejects the claim with "config
+# doesn't contain node <name>, and no DEFAULT_PATH_FOR_NON_LISTED_NODES
+# available" — measured 2026-09-02.
 
 apiVersion: v1
 kind: ConfigMap
@@ -33,7 +38,7 @@ data:
   config.json: |-
     {
       "nodePathMap": [
-        { "node": "DEFAULT", "paths": ["/var/lib/local-path-provisioner"] }
+        { "node": "DEFAULT_PATH_FOR_NON_LISTED_NODES", "paths": ["/var/lib/local-path-provisioner"] }
       ]
     }
   setup: |-
