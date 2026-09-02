@@ -71,13 +71,34 @@ module "cluster" {
   # the affected leaf certificates in seconds with no reboot.
   extra_cert_sans = []
 
-  # One 512 GB SSD (naa.500a07510e157950), carrying BOTH tags. `fast` and
-  # `bulk` are public API and an SSD over-delivers on `bulk`'s guarantee.
-  # When machine 1 joins, tag its HDD `bulk` and Longhorn migrates replicas by
-  # tag — no Platform API change and no PVC rewrite.
+  # ONE disk carrying BOTH tags — not two disks, and that correction was
+  # measured rather than reasoned.
+  #
+  # machine-2-first-build-plan.md §4.1 says "create both Longhorn disks on that
+  # SSD, tagged fast and bulk". Longhorn REFUSES that. It keys disks by
+  # filesystem ID, and two paths on one filesystem collide:
+  #
+  #   Failed to create disk from annotation ... error="the disk
+  #   /var/lib/longhorn-bulk is the samefile system with /var/lib/longhorn,
+  #   diskID 080400000000"
+  #
+  # The failure is quiet in the way that matters: the annotation is rejected
+  # WHOLESALE, so the node registers with `disks: {}` and no tags at all, and
+  # nothing on the Longhorn node object says why. Only longhorn-manager's log
+  # names it. A `fast` PVC would then sit Pending with no schedulable disk.
+  #
+  # One disk with both tags keeps §4.1's actual intent intact: `fast` and `bulk`
+  # are public API (rgd-database.yaml hardcodes `fast`, rgd-application.yaml
+  # enumerates both), both must resolve from day one, and an SSD
+  # over-delivers on `bulk`'s guarantee rather than under-delivering. Classes
+  # name guarantees, not devices (golden-architecture.md §3).
+  #
+  # The migration story is unchanged and is why this is not a compromise: when
+  # machine 1 joins with a real spinning disk, tag its HDD `bulk` and DROP
+  # `bulk` from this tag list. Longhorn moves bulk replicas by tag, with no
+  # Platform API change and no PVC rewrite.
   longhorn_disks = [
-    { path = "/var/lib/longhorn", allowScheduling = true, tags = ["fast"] },
-    { path = "/var/lib/longhorn-bulk", allowScheduling = true, tags = ["bulk"] },
+    { path = "/var/lib/longhorn", allowScheduling = true, tags = ["fast", "bulk"] },
   ]
 
   machine_secrets = var.machine_secrets
