@@ -1,0 +1,32 @@
+# Split out of the root `infrastructure` Kustomization for the same reason as
+# infrastructure-seaweedfs-runtime and infrastructure-platform-api, and found
+# the same way: on a genuinely cold cluster.
+#
+# infrastructure/observability/alerts/ contains a PrometheusRule
+# (monitoring.coreos.com/v1), whose CRD comes from the kube-prometheus-stack
+# HelmRelease that the root `infrastructure` Kustomization installs.
+# kustomize-controller dry-run-validates every raw manifest's GVK before
+# applying anything, so on an empty cluster this fails the WHOLE root
+# Kustomization — no HelmReleases at all, including the one that would install
+# the CRD it is missing. Deadlocked on every 10-minute retry.
+#
+# The two previous clusters never showed this because kube-prometheus-stack had
+# been installed on both long before, so the CRDs already existed on every
+# apply. The pattern was predicted by name in
+# clusters/homelab/infrastructure-platform-api.yaml; this is the third instance
+# of it, which is a good argument for treating "raw manifest + its CRD's
+# HelmRelease in one Kustomization" as the repo's default smell.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: infrastructure-observability-alerts
+  namespace: flux-system
+spec:
+  interval: 10m
+  path: ./infrastructure/observability/alerts
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  dependsOn:
+    - name: infrastructure

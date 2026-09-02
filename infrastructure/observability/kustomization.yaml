@@ -13,4 +13,19 @@ resources:
   - grafana-networkpolicy.yaml
   - alertmanager-networkpolicy.yaml
   - dashboards
-  - alerts
+  # NOT `alerts` — it is applied by its OWN Flux Kustomization
+  # (clusters/*/infrastructure-observability-alerts.yaml), for the same
+  # cold-apply reason as seaweedfs-runtime/ and platform-api/.
+  #
+  # alerts/flux.yaml is a PrometheusRule, whose CRD is installed by the
+  # kube-prometheus-stack HelmRelease directly above it. kustomize-controller
+  # dry-run-validates every raw manifest's GVK before applying ANYTHING, so on
+  # a cold cluster the PrometheusRule fails with `no matches for kind
+  # "PrometheusRule"` and that fails the ENTIRE infrastructure Kustomization —
+  # including the HelmRelease that would have installed the missing CRD.
+  #
+  # This deadlock was invisible until 2026-09-02, and for an instructive
+  # reason: it needs a GENUINELY empty cluster. Both previous clusters had
+  # kube-prometheus-stack installed long before, so the CRDs always already
+  # existed and the dry-run always passed. The machine 2 build was the first
+  # cold apply to include it, and hit it on the first reconcile.
