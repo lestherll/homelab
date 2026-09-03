@@ -131,3 +131,22 @@ variable "longhorn_disks" {
     tags            = list(string)
   }))
 }
+
+variable "google_operator_email" {
+  description = <<-EOT
+    Google account allowed to authenticate to the cluster via OIDC.
+
+    NOT a credential — an allow-list entry checked by claimValidationRules;
+    RBAC (infrastructure/human-auth/) still gates everything it can do. Kept
+    out of git because it is PII, not because it is secret, and supplied via
+    TF_VAR_google_operator_email.
+
+    NOTE the inconsistency this inherits from the VM module, worth resolving
+    rather than copying forever: infrastructure/human-auth/rbac.yaml already
+    commits the same address in plain text, because a RoleBinding subject
+    cannot be a variable. So the value is in git regardless, and the only thing
+    this pattern buys today is that it is in ONE place instead of two.
+  EOT
+  type        = string
+  sensitive   = true
+}
