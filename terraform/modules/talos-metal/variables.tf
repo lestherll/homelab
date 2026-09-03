@@ -18,31 +18,61 @@ variable "cluster_endpoint_ip" {
 
 variable "nodes" {
   description = <<-EOT
-    The node list — the item provisioning-automation-without-netboot.md §3.1
-    calls the highest-value piece of the whole design.
+    The fleet's node inventory, keyed by hostname — normally supplied by
+    `yamldecode`-ing fleet/nodes.yaml rather than written inline.
 
-    Keyed by hostname. `mac` is what the machine config's interface selector
-    matches on: never the interface NAME, because an interfaces entry naming a
-    device that does not exist is ignored SILENTLY, and the failure mode is a
-    node that quietly stays on DHCP.
+    Stage 2 of docs/fleet/inventory-and-provisioning-approach.md. EVERY
+    hardware-specific fact lives in here and nowhere above it, which is what
+    lets a heterogeneous fleet share one module: hardware-fit-notes.md §6
+    records that machine 1 (laptop, 931G HDD, battery) and machine 2 (SFF
+    desktop, one SSD) are near-opposites on every row that matters, while the
+    design assumed interchangeable machines.
 
-    `machine_type` is `controlplane` or `worker`. Exactly one node bootstraps
-    the cluster, and only ever once — see talos.tf.
+    Per node:
+      role     controlplane | worker. Exactly one bootstraps, ever.
+      zone     topology.kubernetes.io/zone, so replicas can spread by machine.
+      network  mac (the interface SELECTOR — never a device name, because an
+               entry naming a device that does not exist is ignored SILENTLY
+               and the node quietly stays on DHCP) and the static address.
+      install  diskSelector — a selector, NOT a path. Enumeration order is not
+               stable across a disk being added, and on machine 2 an iSCSI
+               VIRTUAL-DISK appears at runtime, so "the first disk" eventually
+               means Longhorn's own volume.
+      storage  Longhorn disks and their tags, delivered as a node annotation.
+               MUST be right at first registration: the annotation only takes
+               effect when the node has no existing disks or tags, so a mistake
+               is the Longhorn UI forever, or another rebuild.
   EOT
   type = map(object({
-    ip           = string
-    mac          = string
-    machine_type = string
+    role = string
+    zone = string
+    network = object({
+      mac     = string
+      address = string
+    })
+    install = object({
+      diskSelector = map(string)
+    })
+    storage = list(object({
+      path            = string
+      tags            = list(string)
+      allowScheduling = bool
+    }))
   }))
 
   validation {
-    condition     = length([for k, v in var.nodes : k if v.machine_type == "controlplane"]) == 1
+    condition     = length([for k, v in var.nodes : k if v.role == "controlplane"]) == 1
     error_message = "Exactly one controlplane node. Two control planes tolerate as many failures as one while adding a member that must agree (multi-node-ha-design-notes.md §1); HA waits for a third machine."
   }
 
   validation {
-    condition     = alltrue([for k, v in var.nodes : contains(["controlplane", "worker"], v.machine_type)])
-    error_message = "machine_type must be controlplane or worker."
+    condition     = alltrue([for k, v in var.nodes : contains(["controlplane", "worker"], v.role)])
+    error_message = "role must be controlplane or worker."
+  }
+
+  validation {
+    condition     = alltrue([for k, v in var.nodes : length(v.storage) > 0])
+    error_message = "Every node needs at least one Longhorn disk; a node with none registers with `disks: {}` and no PVC will ever schedule on it."
   }
 }
 
@@ -195,21 +225,29 @@ variable "tailscale_tags" {
 
 variable "dial_over_lan" {
   description = <<-EOT
-    Force Terraform to reach the nodes by LAN address instead of tailnet name.
+    Nodes Terraform must reach by LAN address rather than by tailnet name.
+
+    PER NODE, not a global switch, because joining a machine is exactly the
+    mixed case: the new node is in maintenance mode with no tailnet identity
+    while every existing node is reachable over the tailnet. A boolean here
+    would force the whole fleet onto LAN addressing and make adding a machine a
+    LAN-only operation.
 
     Default false, i.e. **Terraform applies from anywhere** — which is the
     point of this platform and was the last control plane still tied to the
     house. `talosctl` and `kubectl` both went network-independent in
     docs/fleet/talosctl-off-lan.md; this closes the gap.
 
-    Set true for the two cases where a node genuinely has no tailnet identity,
-    both of which are hands-on anyway:
+    List a node for the two cases where it genuinely has no tailnet identity,
+    both of which are hands-on for that machine anyway:
 
       * A FIRST BUILD. The node is in maintenance mode, the tailscale
         extension is not configured, and no auth key has been applied.
       * A REBUILD after `terraform destroy`. `on_destroy` resets the node,
         which wipes /var/lib/tailscale along with STATE, so the machine drops
         off the tailnet and comes back reachable only on the LAN.
+
+        terraform apply -var 'dial_over_lan=["homelab-worker-1"]'
 
     Note this is NOT symmetric with talosctl. A talosconfig takes a LIST of
     endpoints and the client fails over between them — verified 2026-09-03 that
@@ -219,38 +257,19 @@ variable "dial_over_lan" {
     `talos_machine_configuration_apply.endpoint` is a single string, so here
     the choice has to be made explicitly.
   EOT
-  type        = bool
-  default     = false
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for n in var.dial_over_lan : contains(keys(var.nodes), n)])
+    error_message = "dial_over_lan names a node that is not in the inventory."
+  }
 }
 
 variable "machine_secrets" {
   description = "Talos PKI, supplied from SOPS. Never a talos_machine_secrets resource — see talos.tf."
   type        = any
   sensitive   = true
-}
-
-variable "longhorn_disks" {
-  description = <<-EOT
-    Longhorn disks to declare on each node, as the node.longhorn.io
-    default-disks-config annotation.
-
-    machine-2-first-build-plan.md §4.1: machine 2 has ONE SSD, and `fast` and
-    `bulk` are public API (rgd-database.yaml hardcodes `fast`;
-    rgd-application.yaml enumerates both). So both tags live on the one disk.
-    An SSD over-delivers on `bulk`'s guarantee rather than under-delivering,
-    and classes name guarantees rather than devices (golden-architecture.md §3).
-
-    THESE MUST BE RIGHT AT FIRST REGISTRATION. The annotation "only takes
-    effect when there are no existing disks or tags on the node", so a mistake
-    here is the Longhorn UI forever, or another rebuild. Setting it from the
-    machine config — rather than by annotating the Node afterwards — is what
-    guarantees it is present before Longhorn ever sees the node.
-  EOT
-  type = list(object({
-    path            = string
-    allowScheduling = bool
-    tags            = list(string)
-  }))
 }
 
 variable "google_operator_email" {

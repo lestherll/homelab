@@ -51,6 +51,20 @@ variable "tailscale_authkey" {
   sensitive   = true
 }
 
+variable "dial_over_lan" {
+  description = <<-EOT
+    Nodes Terraform must reach by LAN address rather than tailnet name — a
+    machine in maintenance mode has no tailnet identity yet.
+
+      terraform apply -var 'dial_over_lan=["homelab-worker-1"]'
+
+    Per node rather than global on purpose: joining a machine is the mixed
+    case, and a global switch would make adding one a LAN-only operation.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
 module "cluster" {
   source = "../../modules/talos-metal"
 
@@ -90,26 +104,31 @@ module "cluster" {
   #     the change that is finally rid of it; do not carry it onto machine 1.
   install_image = "factory.talos.dev/installer/708747e350d604ae9e57227d8dcf274091453ddb1097b765d4ea8884f1992c1f:v1.13.8"
 
-  # Machine 2 alone. Machine 1 joins as a WORKER once cabled (Talos has no
-  # 802.11 support at all), and HA still waits for a third machine.
+  # THE NODE INVENTORY, and the only place hardware appears.
+  #
+  # Stage 2 of docs/fleet/inventory-and-provisioning-approach.md: a
+  # hand-written YAML list in git, consumed by Terraform. Data rather than HCL
+  # so something else can consume it later — it maps onto Tinkerbell's
+  # `Hardware` object field-for-field, so this fleet can be adopted into netboot
+  # without reinstalling anything (tinkerbell-investigation.md §9).
+  #
+  # Disks, install target and zone are all per node in that file. They used to
+  # be module-wide, which quietly assumed every machine looked like machine 2 —
+  # the assumption hardware-fit-notes.md §6 records as false.
+  nodes = yamldecode(file("${path.root}/../../../fleet/nodes.yaml"))
+
+  # Machine 2 alone for now. Machine 1 joins as a WORKER once cabled (Talos has
+  # no 802.11 support at all), and HA still waits for a third machine.
   cluster_endpoint_ip = "192.168.0.221"
   gateway             = "192.168.0.1"
 
-  nodes = {
-    "homelab-worker-0" = {
-      ip           = "192.168.0.221"
-      mac          = "f4:93:9f:f2:59:82"
-      machine_type = "controlplane"
-    }
-  }
-
-  # The tailnet, which is how `talosctl` reaches this node from off-LAN.
+  # The tailnet, which is how `talosctl` and `terraform` both reach this node
+  # from off-LAN.
   #
-  # This is deliberately a DOMAIN and not an address. Every node's certSAN and
-  # MagicDNS name is derived as `<hostname>.<tailnet_domain>`, so nothing here
-  # has to be re-edited when the LAN is renumbered — the failure mode the old
-  # `talos-cp-01: 10.10.0.10` pin in tailscale-acl/policy.hujson has. Not a
-  # secret: the tailnet name is already in git in ansible/inventory/hosts.ini.
+  # Deliberately a DOMAIN and not an address. Every node's certSAN, MagicDNS
+  # name and Terraform dial target is derived as `<hostname>.<tailnet_domain>`,
+  # so nothing here is re-edited when the LAN is renumbered. Not a secret: the
+  # tailnet name is already in git in ansible/inventory/hosts.ini.
   tailnet_domain    = "tailf4742d.ts.net"
   tailscale_authkey = var.tailscale_authkey
 
@@ -122,36 +141,7 @@ module "cluster" {
   # kind of duplicate that survives a rename.
   extra_cert_sans = []
 
-  # ONE disk carrying BOTH tags — not two disks, and that correction was
-  # measured rather than reasoned.
-  #
-  # machine-2-first-build-plan.md §4.1 says "create both Longhorn disks on that
-  # SSD, tagged fast and bulk". Longhorn REFUSES that. It keys disks by
-  # filesystem ID, and two paths on one filesystem collide:
-  #
-  #   Failed to create disk from annotation ... error="the disk
-  #   /var/lib/longhorn-bulk is the samefile system with /var/lib/longhorn,
-  #   diskID 080400000000"
-  #
-  # The failure is quiet in the way that matters: the annotation is rejected
-  # WHOLESALE, so the node registers with `disks: {}` and no tags at all, and
-  # nothing on the Longhorn node object says why. Only longhorn-manager's log
-  # names it. A `fast` PVC would then sit Pending with no schedulable disk.
-  #
-  # One disk with both tags keeps §4.1's actual intent intact: `fast` and `bulk`
-  # are public API (rgd-database.yaml hardcodes `fast`, rgd-application.yaml
-  # enumerates both), both must resolve from day one, and an SSD
-  # over-delivers on `bulk`'s guarantee rather than under-delivering. Classes
-  # name guarantees, not devices (golden-architecture.md §3).
-  #
-  # The migration story is unchanged and is why this is not a compromise: when
-  # machine 1 joins with a real spinning disk, tag its HDD `bulk` and DROP
-  # `bulk` from this tag list. Longhorn moves bulk replicas by tag, with no
-  # Platform API change and no PVC rewrite.
-  longhorn_disks = [
-    { path = "/var/lib/longhorn", allowScheduling = true, tags = ["fast", "bulk"] },
-  ]
-
+  dial_over_lan         = var.dial_over_lan
   machine_secrets       = var.machine_secrets
   google_operator_email = var.google_operator_email
 }

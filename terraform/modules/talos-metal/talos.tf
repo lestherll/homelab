@@ -23,12 +23,18 @@ locals {
   # error instead of an apply-time one.
   machine_secrets = var.machine_secrets
 
-  controlplane_node = one([for k, v in var.nodes : k if v.machine_type == "controlplane"])
+  controlplane_node = one([for k, v in var.nodes : k if v.role == "controlplane"])
 
-  # Longhorn's disk layout, delivered as a Node annotation from the machine
-  # config so it is present BEFORE Longhorn first registers the node. See
-  # variables.tf — this is the setting whose cost, if wrong, is a rebuild.
-  longhorn_disks_config = jsonencode(var.longhorn_disks)
+  # Longhorn's disk layout, PER NODE, delivered as a Node annotation from the
+  # machine config so it is present BEFORE Longhorn first registers the node.
+  # See variables.tf — this is the setting whose cost, if wrong, is a rebuild.
+  #
+  # Per-node is the whole point of the inventory: machine 1 arrives with a real
+  # spinning disk and needs `bulk` on the HDD while machine 2 drops it, and one
+  # shared list cannot express that.
+  longhorn_disks_config = {
+    for k, v in var.nodes : k => jsonencode(v.storage)
+  }
 
   tailnet_enabled = var.tailnet_domain != ""
 
@@ -56,7 +62,7 @@ locals {
   # -mode cases, which are hands-on regardless. See variables.tf.
   dial_endpoints = {
     for k, v in var.nodes : k => (
-      var.dial_over_lan || !local.tailnet_enabled ? v.ip : local.tailnet_names[k]
+      contains(var.dial_over_lan, k) || !local.tailnet_enabled ? v.network.address : local.tailnet_names[k]
     )
   }
 }
@@ -130,13 +136,6 @@ locals {
         # is seconds — but paying that here costs nothing.
         certSANs = concat(["127.0.0.1", "localhost"], var.extra_cert_sans)
 
-        nodeLabels = {
-          # Longhorn honours the annotation below only with this label set.
-          "node.longhorn.io/create-default-disk" = "config"
-        }
-        nodeAnnotations = {
-          "node.longhorn.io/default-disks-config" = local.longhorn_disks_config
-        }
 
         kubelet = {
           # Required by metrics-server, and this half ALONE DOES NOTHING: the
@@ -181,16 +180,6 @@ locals {
               "!100.64.0.0/10", # ...except Tailscale's CGNAT range
             ]
           }
-          # Longhorn's data paths must be visible to the kubelet, and rshared
-          # so volume mounts propagate.
-          extraMounts = [
-            for d in var.longhorn_disks : {
-              destination = d.path
-              type        = "bind"
-              source      = d.path
-              options     = ["bind", "rshared", "rw"]
-            }
-          ]
         }
       }
       cluster = {
@@ -284,19 +273,19 @@ locals {
 resource "terraform_data" "maintenance_ready" {
   for_each = var.nodes
 
-  input = each.value.ip
+  input = each.value.network.address
 
   provisioner "local-exec" {
     interpreter = ["/bin/sh", "-c"]
     command     = <<-EOT
       i=0
       while [ $i -lt 60 ]; do
-        for target in ${local.dial_endpoints[each.key]} ${each.value.ip}; do
+        for target in ${local.dial_endpoints[each.key]} ${each.value.network.address}; do
           if nc -z -w2 "$target" 50000 2>/dev/null; then exit 0; fi
         done
         i=$((i+1)); sleep 5
       done
-      echo "not reachable on ${local.dial_endpoints[each.key]}:50000 or ${each.value.ip}:50000 after 5m — is ${each.key} powered on and in maintenance mode?" >&2
+      echo "not reachable on ${local.dial_endpoints[each.key]}:50000 or ${each.value.network.address}:50000 after 5m — is ${each.key} powered on and in maintenance mode?" >&2
       exit 1
     EOT
   }
@@ -307,7 +296,7 @@ ephemeral "talos_machine_configuration" "node" {
 
   cluster_name       = var.cluster_name
   cluster_endpoint   = "https://${var.cluster_endpoint_ip}:6443"
-  machine_type       = each.value.machine_type
+  machine_type       = each.value.role
   machine_secrets    = local.machine_secrets
   talos_version      = var.talos_version
   kubernetes_version = var.kubernetes_version
@@ -332,6 +321,38 @@ ephemeral "talos_machine_configuration" "node" {
             # §3: this does NOT re-run the installer on an already-installed
             # node. Changing the installed image is `talosctl upgrade`.
             image = var.install_image
+
+            # A SELECTOR, never a path. Disk enumeration order is not stable
+            # across a disk being added, and machine 2 grows an iSCSI
+            # VIRTUAL-DISK at runtime (Longhorn's own), so "the first disk"
+            # eventually means the wrong one. From the inventory, so a machine
+            # with NVMe or a second spindle needs no module change.
+            diskSelector = each.value.install.diskSelector
+          }
+
+          # Both per node, and both from the inventory. Longhorn honours the
+          # annotation only when the label is set, and only at FIRST
+          # registration — see variables.tf.
+          nodeLabels = {
+            "node.longhorn.io/create-default-disk" = "config"
+            "topology.kubernetes.io/zone"          = each.value.zone
+          }
+          nodeAnnotations = {
+            "node.longhorn.io/default-disks-config" = local.longhorn_disks_config[each.key]
+          }
+
+          kubelet = {
+            # Longhorn's data paths must be visible to the kubelet, and rshared
+            # so volume mounts propagate. Per node, because the paths differ:
+            # machine 1 gets a second entry under /var/mnt/bulk.
+            extraMounts = [
+              for d in each.value.storage : {
+                destination = d.path
+                type        = "bind"
+                source      = d.path
+                options     = ["bind", "rshared", "rw"]
+              }
+            ]
           }
           # Talos APPENDS list values across patches rather than replacing
           # them, which is why 127.0.0.1/localhost from common_patches survive
@@ -344,15 +365,15 @@ ephemeral "talos_machine_configuration" "node" {
           # <name>". The node's own 100.x address is deliberately NOT here: it
           # is not known until the node first joins, and dialling by name means
           # nothing ever needs it.
-          certSANs = compact([each.value.ip, local.tailnet_names[each.key]])
+          certSANs = compact([each.value.network.address, local.tailnet_names[each.key]])
           network = {
             # By MAC, never by name. An interfaces entry naming a device that
             # does not exist is ignored SILENTLY, and the failure mode is a
             # node that quietly stays on DHCP — indistinguishable from success
             # until the lease moves.
             interfaces = [{
-              deviceSelector = { hardwareAddr = each.value.mac }
-              addresses      = ["${each.value.ip}/${var.cidr_prefix}"]
+              deviceSelector = { hardwareAddr = each.value.network.mac }
+              addresses      = ["${each.value.network.address}/${var.cidr_prefix}"]
               routes = [{
                 network = "0.0.0.0/0"
                 gateway = var.gateway
@@ -418,7 +439,7 @@ ephemeral "talos_machine_configuration" "node" {
 
     # The seed goes on CONTROL-PLANE configs only, and identical across them —
     # Sidero's own Cilium guide is explicit about both.
-    each.value.machine_type != "controlplane" ? [] : [
+    each.value.role != "controlplane" ? [] : [
       yamlencode({
         cluster = {
           inlineManifests = [{
@@ -443,8 +464,8 @@ ephemeral "talos_machine_configuration" "node" {
 ephemeral "talos_client_configuration" "cluster" {
   cluster_name    = var.cluster_name
   machine_secrets = local.machine_secrets
-  endpoints       = concat(compact(values(local.tailnet_names)), [for k, v in var.nodes : v.ip])
-  nodes           = [for k, v in var.nodes : v.ip]
+  endpoints       = concat(compact(values(local.tailnet_names)), [for k, v in var.nodes : v.network.address])
+  nodes           = [for k, v in var.nodes : v.network.address]
 }
 
 resource "talos_machine_configuration_apply" "node" {
@@ -458,7 +479,7 @@ resource "talos_machine_configuration_apply" "node" {
   # on the node (a name does NOT). Getting these the same way round is what
   # makes a remote apply possible at all.
   endpoint = local.dial_endpoints[each.key]
-  node     = each.value.ip
+  node     = each.value.network.address
 
   # Returns the machine to maintenance mode on destroy, which restores the
   # rehearsal property the VM had and bare metal otherwise loses. NOTE its
@@ -487,7 +508,7 @@ resource "talos_machine_bootstrap" "cluster" {
   # through the same local anyway rather than hardcoded, so the two cannot
   # drift apart.
   endpoint = local.dial_endpoints[local.controlplane_node]
-  node     = var.nodes[local.controlplane_node].ip
+  node     = var.nodes[local.controlplane_node].network.address
 
   depends_on = [talos_machine_configuration_apply.node]
 

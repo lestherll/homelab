@@ -1,0 +1,92 @@
+# The fleet's node inventory — Stage 2 of
+# docs/fleet/inventory-and-provisioning-approach.md.
+#
+# WHY THIS IS DATA AND NOT HCL. A machine that has not joined the cluster has no
+# controller watching it, so it cannot be reconciled — §1 of that note. The
+# honest answer at this scale is a hand-written list in git, push-reconciled by
+# `terraform apply`, the same shape as `tailscale-acl/`. Writing it as YAML
+# rather than Terraform resource blocks is what lets something else consume it
+# later: it maps onto Tinkerbell's `Hardware` object field-for-field, so a fleet
+# installed from USB can be adopted without reinstalling anything
+# (tinkerbell-investigation.md §9).
+#
+# Deliberately NOT a CRD today. A CRD with no controller behind it is inert data
+# wearing a costume.
+#
+# WHAT THIS FILE IS FOR. The fleet is heterogeneous and the design assumed it was
+# not — hardware-fit-notes.md §6. Machine 1 is a laptop with a 931G HDD and a
+# battery; machine 2 is an SFF desktop with one SSD. Before this file, disks and
+# the install target were MODULE-WIDE, so every node got machine 2's layout:
+# adding machine 1 would have silently mis-tagged its disks, and Longhorn's
+# annotation "only takes effect when there are no existing disks or tags", so
+# that mistake costs a rebuild.
+#
+# The rule the whole thing rests on (golden-architecture.md §3): the cluster
+# knows disk ROLES, never disk PATHS. Hardware appears in this file and nowhere
+# above it.
+#
+# ADDING A MACHINE: add a block, `terraform apply -var 'dial_over_lan=["<name>"]'`
+# while it sits in maintenance mode. Everything else — certSANs, tailnet name,
+# ACL membership, Longhorn tags, zone label — derives from what is here.
+
+homelab-worker-0:
+  # Machine 2 (ThinkCentre SFF). hardware-fit-notes.md §6 calls this the
+  # template for the fleet and machine 1 the outlier.
+  role: controlplane
+  zone: machine-2
+
+  network:
+    # By MAC, never by interface name: an interfaces entry naming a device that
+    # does not exist is ignored SILENTLY, and the node quietly stays on DHCP.
+    mac: "f4:93:9f:f2:59:82"
+    address: 192.168.0.221
+
+  install:
+    # A SELECTOR, not /dev/sda. Measured on this machine 2026-09-03, and the
+    # reason a path would be wrong is visible in the output:
+    #
+    #   sda  512 GB  sata   MTFDDAK512MAY-1A     <- the real disk
+    #   sdb  2.1 GB  iscsi  VIRTUAL-DISK         <- Longhorn's own, appears at RUNTIME
+    #
+    # Enumeration order is not stable across a disk being added, and a naive
+    # "first disk" rule would eventually pick the iSCSI virtual disk. Size plus
+    # type says what is actually meant, and carries to any machine.
+    diskSelector:
+      size: ">= 256GB"
+      type: ssd
+
+  # Longhorn disks, delivered as a node annotation from the machine config so
+  # they are present BEFORE Longhorn first registers the node. These must be
+  # right at first registration — the annotation "only takes effect when there
+  # are no existing disks or tags", so a mistake here is the Longhorn UI
+  # forever, or another rebuild.
+  #
+  # ONE disk carrying BOTH tags, which was measured rather than reasoned:
+  # Longhorn keys disks by filesystem ID and REFUSES two paths on one
+  # filesystem, rejecting the annotation wholesale so the node registers with
+  # no tags at all. `fast` and `bulk` are public API (rgd-database.yaml
+  # hardcodes `fast`), both must resolve from day one, and an SSD over-delivers
+  # on `bulk` rather than under-delivering.
+  #
+  # When machine 1 joins with a real spinning disk: tag its HDD `bulk` and drop
+  # `bulk` from here. Longhorn moves replicas by tag — no Platform API change,
+  # no PVC rewrite. That migration is the whole reason this is per-node.
+  storage:
+    - path: /var/lib/longhorn
+      tags: [fast, bulk]
+      allowScheduling: true
+
+# Machine 1 goes here when it is cabled and wiped — a laptop with a 931G HDD
+# alongside its SSD, joining as a WORKER (two control planes tolerate exactly as
+# many failures as one, so HA waits for a third machine). Sketch, NOT live —
+# `enp2s0` has never held a lease, so neither the MAC nor the address is known:
+#
+# homelab-worker-1:
+#   role: worker
+#   zone: machine-1
+#   network: {mac: "??", address: 192.168.0.???}
+#   install:
+#     diskSelector: {size: ">= 128GB", type: ssd}
+#   storage:
+#     - {path: /var/lib/longhorn,      tags: [fast], allowScheduling: true}
+#     - {path: /var/mnt/bulk/longhorn, tags: [bulk], allowScheduling: true}
