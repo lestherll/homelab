@@ -31,6 +31,16 @@ variable "machine_secrets" {
   sensitive   = true
 }
 
+variable "google_operator_email" {
+  description = <<-EOT
+    Google account allowed to authenticate via OIDC. Not a credential — an
+    allow-list entry; RBAC still gates what it can do. Supplied via
+    TF_VAR_google_operator_email, same out-of-band pattern as machine_secrets.
+  EOT
+  type        = string
+  sensitive   = true
+}
+
 module "cluster" {
   source = "../../modules/talos-metal"
 
@@ -101,7 +111,8 @@ module "cluster" {
     { path = "/var/lib/longhorn", allowScheduling = true, tags = ["fast", "bulk"] },
   ]
 
-  machine_secrets = var.machine_secrets
+  machine_secrets       = var.machine_secrets
+  google_operator_email = var.google_operator_email
 }
 
 output "cluster_endpoint" {

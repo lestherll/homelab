@@ -35,6 +35,59 @@ locals {
 # a CNI arrives, Talos reboots to retry every 10 minutes, and Flux cannot break
 # the circularity because its controllers are pods that need pod networking.
 # Talos applies inlineManifests during bootstrap — inside Terraform's window.
+# The apiserver's identity providers.
+#
+# WHY THIS EXISTS ON A CLUSTER REACHED OVER THE TAILNET: the apiserver's
+# tailnet exposure is a ProxyGroup in `mode: noauth`, which deliberately does
+# NOT forward client certificates — it forwards every request unmodified so a
+# caller's own bearer token reaches the apiserver intact. That is what makes
+# per-repo isolation generic (an admission policy reading the token's claims)
+# instead of one tailnet tag per app repo. The consequence is that
+# client-cert kubectl works only on the LAN, and ANY off-LAN access —
+# CI's GitHub token or the operator's Google token — needs this file.
+#
+# AuthenticationConfiguration replaces the legacy `oidc-*` apiServer flags,
+# and the two are mutually exclusive: the flags support exactly one issuer,
+# which is what forces both issuers into one file here.
+locals {
+  authentication_configuration_yaml = <<-EOT
+    apiVersion: apiserver.config.k8s.io/v1
+    kind: AuthenticationConfiguration
+    jwt:
+      - issuer:
+          url: https://token.actions.githubusercontent.com
+          audiences:
+            # MUST match the audience CI actually requests
+            # (`&audience=homelab-k8s` in each app repo's register.yml), not
+            # GitHub's default audience. Using the default silently broke every
+            # CI call to the VM cluster for five days — see talos.tf's note.
+            - homelab-k8s
+        claimMappings:
+          username:
+            claim: sub
+            prefix: "gha:"
+          groups:
+            claim: repository_owner
+            prefix: "gha:"
+      - issuer:
+          url: https://accounts.google.com
+          audiences:
+            - 645380473983-4r5f3jhh1thajbun7bj1t28o4o4mds0d.apps.googleusercontent.com
+        claimMappings:
+          username:
+            claim: email
+            prefix: "google:"
+          # No groups claim mapped — single user, and RBAC
+          # (infrastructure/human-auth/) binds the username directly rather
+          # than inventing a group.
+        claimValidationRules:
+          - expression: "claims.email == '${var.google_operator_email}'"
+            message: "only the operator's account may authenticate"
+          - expression: "claims.email_verified == true"
+            message: "unverified email"
+  EOT
+}
+
 locals {
   cilium_seed = file("${path.module}/cilium-seed.yaml")
 
@@ -82,12 +135,55 @@ locals {
         # against a control-plane taint nothing tolerates.
         allowSchedulingOnControlPlanes = true
 
+        # Unlike the CNI and kube-proxy settings below, the apiserver is a
+        # Talos STATIC POD rather than a bootstrap manifest — so this lands on
+        # an ordinary `terraform apply` and does NOT need a rebuild.
+        #
+        # Risk worth naming: single control plane. Malformed config here means
+        # the apiserver does not come back, with nothing to fall back on.
+        # Recovery is reverting the machine config with talosctl, which works
+        # because the PKI is in SOPS rather than in tfstate.
+        apiServer = {
+          extraArgs = {
+            authentication-config = "/etc/kubernetes/auth/authentication-config.yaml"
+          }
+          extraVolumes = [{
+            # hostPath must be under /var — see the machine.files patch.
+            # mountPath is the in-container path and is unconstrained.
+            hostPath  = "/var/etc/kubernetes/auth"
+            mountPath = "/etc/kubernetes/auth"
+            readonly  = true
+          }]
+        }
+
         # Cilium-only (cilium-only-networking.md). Both of these are Talos
         # BOOTSTRAP MANIFESTS and do not retrofit a running cluster — Talos
         # re-renders, reports no error, and leaves live objects untouched. They
         # land on a rebuild, which is why they must be right the first time.
         network = { cni = { name = "none" } }
         proxy   = { disabled = true }
+      }
+    }),
+
+    yamlencode({
+      machine = {
+        files = [{
+          op = "create"
+          # MUST be under /var. Talos's root filesystem is a read-only
+          # squashfs, and `op: create` outside /var fails at boot with "create
+          # operation not allowed outside of /var", which then wedges the node
+          # in a 35-minute reboot loop — the kubelet cannot write its bootstrap
+          # PKI either once the boot is degraded. Learned live on the VM
+          # cluster, 2026-08-17/18.
+          path = "/var/etc/kubernetes/auth/authentication-config.yaml"
+          # 420 decimal == 0o644. NOT 0o600: the apiserver container reads this
+          # as a non-root process and an owner-only file crash-loops it with
+          # "permission denied" — learned in the same incident. World-readable
+          # is fine: the mount is read-only and the content is an email plus an
+          # already-public OAuth client ID.
+          permissions = 420
+          content     = local.authentication_configuration_yaml
+        }]
       }
     }),
   ]
