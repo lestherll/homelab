@@ -65,7 +65,7 @@
     // advertise a whole subnet and still expose exactly one port.
     "autoApprovers": {
         "services": {
-            "svc:kube-apiserver-ci": ["tag:k8s"],
+            "svc:kube-apiserver-metal": ["tag:k8s"],
         },
         "routes": {
             "10.10.0.0/24": ["lestherll@github"],
@@ -129,7 +129,7 @@
         // Note the dst is the SERVICE, not tag:k8s. A service grant is separate
         // from a device grant, so the rule above does not imply this one and
         // this one gives CI no access to any app.
-        {"src": ["tag:ci"], "dst": ["svc:kube-apiserver-ci"], "ip": ["tcp:443"]},
+        {"src": ["tag:ci"], "dst": ["svc:kube-apiserver-metal"], "ip": ["tcp:443"]},
 
         // The operator reaching the apiserver over the tailnet (LES-104).
         // Same service as the CI rule above, same noauth proxy — the proxy
@@ -139,7 +139,7 @@
         // its own auth model) is resolved: the apiserver's multi-issuer
         // AuthenticationConfiguration does the identity check, and RBAC
         // (infrastructure/human-auth/) does the authorization.
-        {"src": ["autogroup:member"], "dst": ["svc:kube-apiserver-ci"], "ip": ["tcp:443"]},
+        {"src": ["autogroup:member"], "dst": ["svc:kube-apiserver-metal"], "ip": ["tcp:443"]},
 
         // The operator reaching the Talos machine API over the subnet route
         // machine 1 advertises (LES-162; the reachability half of LES-136).
@@ -270,7 +270,7 @@
         // the operator's device, or reaching the host over SSH.
         //
         // Deliberately deny-only. The matching accept would be the grant on
-        // svc:kube-apiserver-ci, and a VIP service is not a destination this
+        // svc:kube-apiserver-metal, and a VIP service is not a destination this
         // tests block can name. That rule's real test is app registration
         // continuing to work; see docs/zero-touch-app-registration.md.
         {
