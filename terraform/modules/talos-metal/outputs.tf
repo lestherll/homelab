@@ -5,7 +5,7 @@ output "cluster_endpoint" {
 
 output "node_ips" {
   description = "Node addresses, keyed by hostname."
-  value       = { for k, v in var.nodes : k => v.ip }
+  value       = { for k, v in var.nodes : k => v.network.address }
 }
 
 output "controlplane_node" {
@@ -28,7 +28,7 @@ output "talos_endpoints" {
 
     Safe as an output — unlike a talosconfig this is a hostname, not PKI.
   EOT
-  value       = { for k, v in var.nodes : k => coalesce(local.tailnet_names[k], v.ip) }
+  value       = { for k, v in var.nodes : k => coalesce(local.tailnet_names[k], v.network.address) }
 }
 
 # Deliberately NOT an output: kubeconfig and talosconfig. Both embed the PKI,

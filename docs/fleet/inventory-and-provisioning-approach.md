@@ -113,6 +113,15 @@ Two concrete gaps it closes immediately:
 
 ## 3. Stage 2 — the pre-cluster node list
 
+> **BUILT 2026-09-03** as `fleet/nodes.yaml`, consumed by
+> `terraform/clusters/homelab-metal/` via `yamldecode`. It carries exactly the
+> fields listed below, plus `zone` (for `topology.kubernetes.io/zone`). Three
+> things that were module-wide moved into it — install disk selector, Longhorn
+> disks/tags, and the kubelet's bind mounts — which is what makes a
+> heterogeneous fleet expressible at all; see
+> [hardware-fit-notes.md §6](hardware-fit-notes.md). The present tense below is
+> the pre-build framing and still explains *why*.
+
 For machines that are not cluster members, there is no controller, so the honest
 answer is a **small hand-written YAML list in git**, consumed by Terraform to
 render machine configs. Per machine: hostname, MAC, LAN address, role
