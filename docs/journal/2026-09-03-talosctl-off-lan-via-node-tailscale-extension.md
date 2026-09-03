@@ -59,6 +59,29 @@ a widening to `["*"]` cannot pass silently. Reachability is device-independent
 CRL**, so second devices get `talosctl config new --roles os:reader --crt-ttl
 720h` rather than a copy of the admin config.
 
+**Execution findings (2026-09-03, after the build):** three, all of which cost
+time and none of which were predicted by the design.
+
+- **`talosctl upgrade --drain` defaults to true and cannot succeed on one
+  node.** Nowhere to evict to, and Longhorn instance-manager PDBs refuse
+  outright. It burned the 5m timeout, **skipped the reboot**, and left the node
+  cordoned: 41 pods Pending (CoreDNS, Cilium operator, Flux, CNPG) for ten
+  minutes. The install runs *first*, so `upgrade completed` and dmesg's
+  `exit_code=0` are both true about the install and silent about the reboot.
+  Nothing uncordons on the way out. Use `--drain=false`.
+- **`--endpoints` takes a MagicDNS name; `--nodes` does not.** `--nodes` is a
+  routing header apid resolves *on the node*, using
+  `machine.network.nameservers` (1.1.1.1/9.9.9.9) — no `.ts.net`. It fails with
+  `name resolver error: produced zero addresses`, which reads as a client DNS
+  fault and is not one. Direct consequence of `TS_ACCEPT_DNS=false`, which is
+  still the right call. The runbook told the operator to set both to the name;
+  that was wrong.
+- **Talos auto-adds every node address to certSANs**, tailscale0's included —
+  `100.105.86.101` and the IPv6 appeared without being configured. So dialling
+  the endpoint by tailnet IP verifies too. The explicit DNS certSAN is still
+  what to rely on (it survives the device being replaced), but "the 100.x is
+  not in the cert" was wrong.
+
 **Validation:** schematic minted and read back from the Image Factory;
 `siderolabs/tailscale` confirmed present for v1.13.8 (`ghcr.io/siderolabs/
 tailscale:1.98.9`); the `ExtensionServiceConfig` document and the certSAN
@@ -67,13 +90,14 @@ clean; `policy.hujson` parses and its tag/grant/tests land as intended. **Not
 yet validated on the node** — that needs the auth key and the `talosctl
 upgrade`.
 
+**Outcome: done 2026-09-03.** Verified from a device with no `192.168.0.x`
+address — `talosctl -e homelab-worker-0.tailf4742d.ts.net -n 192.168.0.221 get
+extensions` returns `tailscale 1.98.9` / schematic `708747e3…`; `:50000` open;
+`:9100`, `:10256`, `:6443`, `:2379`, `:10250`, `:22` all blocked. The upgrade
+also dropped the dormant `talos.config=http://192.168.0.44:8080/config.yaml`
+kernel argument.
+
 **Follow-up:**
-- Mint the reusable `tag:talos` auth key, `terraform apply`, then `talosctl
-  upgrade` — the extension does **not** install on apply-config. Runbook in
-  `docs/fleet/talosctl-off-lan.md` §5.
-- The upgrade also finally drops the dormant
-  `talos.config=http://192.168.0.44:8080/config.yaml` kernel argument, which
-  `talosctl reset` would otherwise activate into a node with no API at all.
 - Break-glass `kubectl` at `:6443` on the node needs
   `cluster.apiServer.certSANs` plus one grant; deliberately left out.
 - Delete `talos-cp-01`, its autoApprover, grant and tests when machine 1 is

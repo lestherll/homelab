@@ -21,6 +21,11 @@ output "talos_endpoints" {
     rather than addresses on purpose: `talosctl` verifies TLS against the value
     it DIALS, and a name is the half of that pair the LAN cannot renumber.
 
+    This is `--endpoints` ONLY. Do not feed it to `--nodes`: that is a routing
+    header apid resolves on the NODE, using machine.network.nameservers, which
+    do not resolve .ts.net — it fails with "produced zero addresses", which
+    looks like a client DNS fault and is not one.
+
     Safe as an output — unlike a talosconfig this is a hostname, not PKI.
   EOT
   value       = { for k, v in var.nodes : k => coalesce(local.tailnet_names[k], v.ip) }

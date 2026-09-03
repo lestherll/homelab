@@ -163,14 +163,20 @@ All three verified against containerboot v1.98.9 rather than assumed.
 
 ## 5. Runbook — the half that is not committable
 
-Order matters. Steps 1–2 are on the LAN; step 5 is the first thing that proves
-the change.
+Order matters, and steps 1 and 2 are the pair most easily done backwards.
+Steps 1–4 are on the LAN; step 5 is the first thing that proves the change.
 
-1. **Mint a reusable, `tag:talos`-tagged auth key** and SOPS it — command in
+1. **Merge this branch first**, so the ACL applies. `tag:talos` must exist in
+   `tagOwners` *before* a tagged key can be minted — minting one for a tag the
+   policy does not define is rejected. **Applied 2026-09-03.**
+
+2. **Mint a reusable, `tag:talos`-tagged auth key** and SOPS it — command in
    `terraform/README.md`. A key *without* the tag produces a node that joins as
    a user-owned device, matches no grant, and reads as "Tailscale is broken".
 
-2. **Merge this branch**, so the ACL applies. `.github/workflows/tailscale-acl.yml`
+   Runs on the Mac: the age key is at `~/Library/Application Support/sops/age/`,
+   sops's macOS default rather than the `~/.config/sops/age/` most of this
+   repo's docs assume. `.github/workflows/tailscale-acl.yml`
    runs on push to `main` touching `tailscale-acl/`; PRs run the same policy in
    `test` mode. `tag:talos` must exist in `tagOwners` **before** the key is used,
    or minting a tagged key is rejected.
@@ -192,14 +198,30 @@ the change.
    the `talos.config=` leftover. **Single control plane: this is a full API
    outage for its duration.**
 
-5. **Point the client at the name, not the address:**
+5. **Point the ENDPOINT at the name. Leave the node an address.**
 
    ```bash
    talosctl config endpoint homelab-worker-0.tailf4742d.ts.net
-   talosctl config node     homelab-worker-0.tailf4742d.ts.net
+   # node stays 192.168.0.221 — do NOT set it to the MagicDNS name
    ```
 
-   `terraform output talos_endpoints` prints exactly these.
+   The two flags are not interchangeable, and this is the single sharpest trap
+   in the whole change:
+
+   - `--endpoints` is the address the **client dials**. A MagicDNS name works,
+     because your machine resolves it.
+   - `--nodes` is a routing header **apid resolves on the node**, whose resolver
+     is `machine.network.nameservers` — `1.1.1.1` and `9.9.9.9`, which know
+     nothing about `.ts.net`. A MagicDNS name here fails with
+     `name resolver error: produced zero addresses`, which reads like a client
+     DNS problem and is not one.
+
+   `TS_ACCEPT_DNS=false` is what makes that true, and it stays false on purpose:
+   giving a single control plane's resolver over to MagicDNS to save typing an
+   IP is a bad trade.
+
+   Measured 2026-09-03, off-LAN — `-e` name / `-n` IP works, `-e` name with no
+   `-n` works, and any `-n <name>` fails regardless of what `-e` is.
 
 6. **Mint a scoped client config per device**, rather than copying the admin one:
 
@@ -234,6 +256,33 @@ the change.
   file that did not exist yet. Single control plane: that window is a full API
   outage, so sequence it deliberately.
 
+- **`talosctl upgrade` drains by default, and on a single node that can never
+  succeed.** `--drain` defaults to **true** with a 5-minute `--drain-timeout`.
+  There is nowhere to evict pods *to*, and Longhorn's instance-manager PDBs
+  refuse eviction outright, so the drain burns its timeout and the **reboot is
+  skipped** — leaving the new image installed but not running, and the node
+  **cordoned**. Measured 2026-09-03: 41 pods Pending, including CoreDNS, Cilium
+  operator, Flux and CNPG, for the ten minutes before anyone looked.
+
+  Two things make it hard to spot. The install genuinely succeeds first, so
+  dmesg reads `upgrade completed successfully: exit_code=0` and `talosctl`
+  prints `upgrade completed` — both true, both about the install, neither about
+  the reboot. And nothing uncordons on the way out, so a plain `talosctl reboot`
+  afterwards does not fix the cordon.
+
+  Always `--drain=false` here. Draining protects workloads by moving them
+  elsewhere; with one node there is no elsewhere, so it buys nothing it could
+  not also break.
+
+  ```bash
+  talosctl -n <node> upgrade --drain=false --image factory.talos.dev/installer/<id>:<version>
+  kubectl get node                     # confirm NOT SchedulingDisabled
+  ```
+
+- **`upgrade completed` does not mean it rebooted.** The only two things that
+  cannot lie: `talosctl read /proc/uptime` (must be small) and
+  `talosctl get extensions` (the schematic ID must be the new one).
+
 - **A schematic change is not a `terraform apply`.** `apply-config` never
   re-runs the installer. Terraform reports success, `talosctl get machineconfig`
   shows the new image, and the node keeps the old one — silently. Step 4 is not
@@ -241,9 +290,26 @@ the change.
 
 ## 7. Done when
 
-`talosctl --nodes homelab-worker-0.tailf4742d.ts.net version` works from a
-device that is **not** on the LAN, and `:9100` on that node stays unreachable
-from the tailnet.
+**Met 2026-09-03**, verified from a device with no `192.168.0.x` address:
+
+```
+talosctl -e homelab-worker-0.tailf4742d.ts.net -n 192.168.0.221 get extensions
+  → tailscale 1.98.9, schematic 708747e3…
+
+port 50000  OPEN
+port  9100  blocked      ← the one that matters
+ports 10256, 6443, 2379, 10250, 22  blocked
+```
+
+### A certSAN note, corrected
+
+Talos **auto-adds every node address** to `machine.certSANs`, tailscale0's
+included. After the upgrade the node carries `100.105.86.101` and
+`fd7a:115c:a1e0::a72b:5666` alongside the explicitly-configured
+`homelab-worker-0.tailf4742d.ts.net`, so dialling the endpoint by tailnet IP
+verifies too. The explicit DNS entry is still what you want to rely on — it is
+the half that survives the device being replaced — but "the 100.x is not in the
+cert" was wrong.
 
 ## 8. Deliberately not done
 
