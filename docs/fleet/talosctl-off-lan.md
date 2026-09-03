@@ -163,14 +163,20 @@ All three verified against containerboot v1.98.9 rather than assumed.
 
 ## 5. Runbook — the half that is not committable
 
-Order matters. Steps 1–2 are on the LAN; step 5 is the first thing that proves
-the change.
+Order matters, and steps 1 and 2 are the pair most easily done backwards.
+Steps 1–4 are on the LAN; step 5 is the first thing that proves the change.
 
-1. **Mint a reusable, `tag:talos`-tagged auth key** and SOPS it — command in
+1. **Merge this branch first**, so the ACL applies. `tag:talos` must exist in
+   `tagOwners` *before* a tagged key can be minted — minting one for a tag the
+   policy does not define is rejected. **Applied 2026-09-03.**
+
+2. **Mint a reusable, `tag:talos`-tagged auth key** and SOPS it — command in
    `terraform/README.md`. A key *without* the tag produces a node that joins as
    a user-owned device, matches no grant, and reads as "Tailscale is broken".
 
-2. **Merge this branch**, so the ACL applies. `.github/workflows/tailscale-acl.yml`
+   Runs on the Mac: the age key is at `~/Library/Application Support/sops/age/`,
+   sops's macOS default rather than the `~/.config/sops/age/` most of this
+   repo's docs assume. `.github/workflows/tailscale-acl.yml`
    runs on push to `main` touching `tailscale-acl/`; PRs run the same policy in
    `test` mode. `tag:talos` must exist in `tagOwners` **before** the key is used,
    or minting a tagged key is rejected.

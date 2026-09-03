@@ -90,10 +90,18 @@ terraform init
 terraform apply
 ```
 
-`sops` and the age key live on machine 1, not the Mac — so the three `export`s
-are produced there and carried over, or the apply runs there. Copying the age
-key to a second device to save an SSH hop spreads D12's single root key, which
-is a worse trade than the inconvenience.
+All three `export`s decrypt on the Mac: the age key is present at
+`~/Library/Application Support/sops/age/keys.txt` — sops's **macOS** default,
+which is not `~/.config/sops/age/` and is easy to conclude is missing.
+
+That makes this the first workflow here that runs end to end off machine 1, and
+it is worth naming what it costs rather than only what it buys.
+`docs/fleet/headless-talos-install.md` §10.2 says to do PKI work on machine 1
+*"because sops and the age key are there; the Mac has neither"*, and argues that
+copying the key over to save an SSH hop is a bad trade. That is no longer the
+state of the world — the key is on both — so D12's single root key now has two
+copies, and a lost or compromised laptop is a PKI rotation. Deliberate or not,
+it should be a decision rather than a discovery.
 
 ### The Tailscale auth key
 
