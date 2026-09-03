@@ -60,10 +60,51 @@ locals {
   # Defaults to the tailnet name so that `terraform apply` works from
   # anywhere; var.dial_over_lan is the escape hatch for the two maintenance
   # -mode cases, which are hands-on regardless. See variables.tf.
+  # A node being joined has no tailnet identity AND no predictable address —
+  # Talos in maintenance mode DHCPs on every physical interface, so the machine
+  # is up but wherever the router put it. data.external.maintenance_address
+  # below resolves that from the MAC, which fleet/nodes.yaml already carries as
+  # the interface selector.
+  #
+  # `try` rather than a bare lookup so the two are not coupled: a node listed
+  # in dial_over_lan whose discovery has not run yet falls back to its inventory
+  # address instead of failing to evaluate.
+  discovered = {
+    for k in var.dial_over_lan : k => try(
+      data.external.maintenance_address[k].result.address,
+      var.nodes[k].network.address
+    )
+  }
+
+  # endpoint — what the operator's machine DIALS.
   dial_endpoints = {
     for k, v in var.nodes : k => (
-      contains(var.dial_over_lan, k) || !local.tailnet_enabled ? v.network.address : local.tailnet_names[k]
+      contains(var.dial_over_lan, k) ? local.discovered[k] :
+      (local.tailnet_enabled ? local.tailnet_names[k] : v.network.address)
     )
+  }
+
+  # node — the routing header apid resolves. Normally the node's own inventory
+  # address; while it is being joined it does not HAVE that address yet, so it
+  # is whatever discovery found.
+  node_addresses = {
+    for k, v in var.nodes : k => (
+      contains(var.dial_over_lan, k) ? local.discovered[k] : v.network.address
+    )
+  }
+}
+
+# Only for nodes being joined, so an ordinary plan never shells out. The script
+# tries the inventory address first (one connect) and only ARP-sweeps if that
+# fails, so it is also cheap for a node booted with an `ip=` kernel argument.
+data "external" "maintenance_address" {
+  for_each = toset(var.dial_over_lan)
+
+  program = ["${path.module}/../../scripts/discover-maintenance-node.sh"]
+
+  query = {
+    mac              = var.nodes[each.key].network.mac
+    expected_address = var.nodes[each.key].network.address
   }
 }
 
@@ -280,7 +321,7 @@ resource "terraform_data" "maintenance_ready" {
     command     = <<-EOT
       i=0
       while [ $i -lt 60 ]; do
-        for target in ${local.dial_endpoints[each.key]} ${each.value.network.address}; do
+        for target in ${local.dial_endpoints[each.key]} ${local.node_addresses[each.key]} ${each.value.network.address}; do
           if nc -z -w2 "$target" 50000 2>/dev/null; then exit 0; fi
         done
         i=$((i+1)); sleep 5
@@ -508,7 +549,7 @@ resource "talos_machine_bootstrap" "cluster" {
   # through the same local anyway rather than hardcoded, so the two cannot
   # drift apart.
   endpoint = local.dial_endpoints[local.controlplane_node]
-  node     = var.nodes[local.controlplane_node].network.address
+  node     = local.node_addresses[local.controlplane_node]
 
   depends_on = [talos_machine_configuration_apply.node]
 

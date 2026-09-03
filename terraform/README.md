@@ -175,6 +175,28 @@ talosctl config endpoint homelab-worker-0.tailf4742d.ts.net 192.168.0.221
 The provider's `endpoint` is a single string, which is why the choice is
 explicit on the Terraform side.
 
+### Adding a machine
+
+Put it in maintenance mode, add a block to `fleet/nodes.yaml`, then:
+
+```bash
+terraform apply -var 'dial_over_lan=["homelab-worker-1"]'
+```
+
+You do **not** need to know the machine's address. Talos in maintenance mode
+runs a DHCP client on every physical interface, so it is up but wherever the
+router put it — and `scripts/discover-maintenance-node.sh` resolves that from
+the MAC the inventory already carries as the interface selector. It tries the
+inventory address first (one connect) and only ARP-sweeps if that fails, so a
+machine booted with an `ip=` kernel argument costs nothing extra.
+
+The alternative was a **DHCP reservation**, rejected because it is not
+version-controlled: it lives in router NVRAM you cannot diff, review or
+restore, and it does not survive a new router. See LES-177.
+
+Discovery runs **only** for nodes named in `dial_over_lan`, so an ordinary plan
+never shells out.
+
 ### Changing the installer image is not `terraform apply`
 
 `install_image` carries the Image Factory schematic, and **system extensions

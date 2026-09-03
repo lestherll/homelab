@@ -23,5 +23,13 @@ terraform {
       source  = "siderolabs/talos"
       version = "0.11.0"
     }
+    # Runs scripts/discover-maintenance-node.sh, which finds a machine sitting
+    # in maintenance mode by MAC. Only ever invoked for nodes named in
+    # var.dial_over_lan, so an ordinary plan does not shell out at all.
+    # 2.3.5 (2025-02-20), re-verified 2026-09-03.
+    external = {
+      source  = "hashicorp/external"
+      version = "2.3.5"
+    }
   }
 }

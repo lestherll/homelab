@@ -116,6 +116,10 @@ Two concrete gaps it closes immediately:
 > **BUILT 2026-09-03** as `fleet/nodes.yaml`, consumed by
 > `terraform/clusters/homelab-metal/` via `yamldecode`. It carries exactly the
 > fields listed below, plus `zone` (for `topology.kubernetes.io/zone`). Three
+> Terraform also no longer needs a machine's address to reach it — it discovers
+> a maintenance-mode node from the MAC in this file
+> (`terraform/scripts/discover-maintenance-node.sh`), which is what closes step
+> 4–5 of §1's table without a DHCP reservation. Three
 > things that were module-wide moved into it — install disk selector, Longhorn
 > disks/tags, and the kubelet's bind mounts — which is what makes a
 > heterogeneous fleet expressible at all; see
