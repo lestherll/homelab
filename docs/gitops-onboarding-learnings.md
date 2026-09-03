@@ -1,6 +1,6 @@
 # GitOps app-onboarding: learnings from hand-built instances
 
-Per `CONCEPT.md`'s D1 promotion rule, a resource type earns a Layer 1
+Per this platform's promotion rule, a resource type earns a Layer 1
 template (or Layer 2 typed API) only after the third instance has been
 built by hand — designing the abstraction before real instances exist is
 the standard way platform APIs end up leaky. This doc tracks what each

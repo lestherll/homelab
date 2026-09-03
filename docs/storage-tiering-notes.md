@@ -97,7 +97,7 @@ Placement rules, in the order they actually get argued about:
 - **Postgres (CNPG) stays on the SSD.** WAL fsyncs are latency-bound; a 5400rpm
   drive is the wrong home regardless of database size.
 - **Prometheus stays on the SSD.** Constant writes plus block compaction. It is
-  also explicitly *disposable* per CONCEPT.md §D4 — there is nothing to protect,
+  also explicitly *disposable* by design — there is nothing to protect,
   so paying a performance cost to relocate it buys nothing. Bound its size with
   `retentionSize` instead.
 - **SeaweedFS volume data belongs on the HDD.** Large, sequential, and the one
@@ -228,7 +228,7 @@ filesystem's free space, so relocating a volume silently changes what
   do this. Deleting the PV object does not delete the data.
 
 **Still open:** no backup target. 870G of empty spinning disk is the natural
-home for the off-host backup CONCEPT.md C9/S4 flags as deferred — not
-designed, not built, tracked as LES-68. Note that an on-host backup on a
+home for the off-host backup the platform still lacks — not designed, not
+built, tracked as LES-68. Note that an on-host backup on a
 second disk protects against disk failure and fat-fingering, not against
 losing the machine.

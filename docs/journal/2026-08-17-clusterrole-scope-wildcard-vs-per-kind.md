@@ -18,8 +18,8 @@ redefining what a CRD is, even for this identity.
   already the operator's own account.
 
 **Security impact:** still well short of `cluster-admin` (RBAC/CRD writes
-excluded), but broad within each listed group. Acceptable given single-user
-scope (`CONCEPT.md` §3) — would need revisiting if a second real identity
-is ever added.
+excluded), but broad within each listed group. Acceptable given this
+platform's single-user scope — would need revisiting if a second real
+identity is ever added.
 
 **Ref:** `infrastructure/human-auth/rbac.yaml`, PR #69

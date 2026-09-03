@@ -1,8 +1,11 @@
 # Target architecture
 
-**Status: design, 2026-08-30.** The end state D20 is aiming at. Not built.
-Implements `docs/adr/0001-single-model-talos-fleet.md`; read that for *why*, this
-for *what*.
+**Status: design, 2026-08-30 — partially built.** The end state D20 is aiming
+at (fleet size 3, real HA). Machine 2's single-node build has landed several
+individual pieces this describes (certSANs, the Longhorn/Tailscale extensions,
+disk-tag-based storage classes); the N=3/VIP/HA shape itself is still ahead of
+machine 1's rebuild. Implements `docs/adr/0001-single-model-talos-fleet.md`;
+read that for *why*, this for *what*.
 
 > **Scope, in the layers of `docs/fleet/golden-architecture.md`:** this document
 > is the detailed build-out of the **Fleet** and **Infrastructure** layers. The

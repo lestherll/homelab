@@ -4,11 +4,12 @@
 what this system already is, names the boundaries it has been relying on
 unnamed, and states what those boundaries commit to.
 
-> **This file outlives the D20 ADR.** `docs/adr/0001-single-model-talos-fleet.md`
-> says that on acceptance its Decision becomes D20 in `CONCEPT.md` and its body
-> becomes `single-model-fleet-design-notes.md`, after which that file is deleted.
-> This one is not part of that migration — D20 is a decision *inside* this
-> architecture, not the architecture itself.
+> **This file outlives the D20 ADR.** The ADR
+> (`docs/adr/0001-single-model-talos-fleet.md`) is now Accepted and is its own
+> permanent record — no promotion into `CONCEPT.md` or a design-notes file, since
+> `CONCEPT.md` no longer carries a numbered decision log for it to be promoted
+> into. This document is not part of that record — D20 is a decision *inside*
+> this architecture, not the architecture itself.
 
 **Why it is being written now.** Four investigations in one sitting — Metal³,
 Tinkerbell, Tinkerbell + Cluster API, and the fleet's actual hardware — all
@@ -28,7 +29,7 @@ turns a recurring rhetorical move into something checkable.
 | **Infrastructure** | The cloud primitives: CNI + policy, storage classes, ingress/identity, data-service operators, telemetry | Flux, from git | `infrastructure/**` |
 | **Fleet** | Machines: acquisition, inventory, power, boot, OS install, machine config, decommission | Terraform + hand, today | `terraform/`, `docs/fleet/`, retiring `ansible/` |
 
-**The Platform API is the product.** `CONCEPT.md` §1 describes the whole project
+**The Platform API is the product.** `CONCEPT.md` describes the whole project
 as going *"from an idea to code, built, running, and observable without manually
 provisioning anything"* — that sentence describes this layer. The other two exist
 to hold it up. Every decision below the top layer is justified by whether the top
@@ -64,8 +65,7 @@ layer notices, which is why §4 is the section that matters.
   cross-cutting — deliberately not inside a layer:
     tailscale-acl/   git-owned, outside Flux; AGENT.md's
                      "fourth control plane"
-    observability    CONCEPT.md C7 calls it cross-cutting;
-                     it reads all three layers
+    observability    cross-cutting by nature — it reads all three layers
 ```
 
 Two things the diagram is making explicit that prose keeps losing:
@@ -220,5 +220,5 @@ direction, rather than being absorbed quietly.
   Infrastructure boundary, and why inventory splits across it
 - `docs/fleet/fleet-control-plane-survey.md` — its "five planes" decompose the
   **Fleet layer**, one level below this document
-- `CONCEPT.md` §11 D1 — "Layer 0/1/2" is the *thickness* of the Platform API
-  layer, not a sibling of these three
+- `CONCEPT.md`'s prior decision log (git history) — "Layer 0/1/2" is the
+  *thickness* of the Platform API layer, not a sibling of these three

@@ -16,8 +16,8 @@ kubectl --kubeconfig ~/.kube/config top nodes
 kubectl --kubeconfig ~/.kube/config get node <node> -o jsonpath='{.status.allocatable.memory} {.status.allocatable.cpu}{"\n"}'
 ```
 
-Cross-check against `CONCEPT.md` D7: observability's own budget is a hard cap
-of ~20% of the machine, ~3GB. Sum the `resources.limits` of everything under
+Cross-check against observability's own hard budget cap: ~20% of the
+machine, ~3GB. Sum the `resources.limits` of everything under
 `infrastructure/observability/helmrelease.yaml` before treating a bump as free
 — it should stay under that budget, not just under total node capacity.
 

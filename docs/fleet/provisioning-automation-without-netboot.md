@@ -1,8 +1,12 @@
 # Fleet automation with manual install accepted — what is left, and is it worth it
 
-**Status: recommendation, 2026-09-01. Nothing built.** Answers: *given manual Talos
-installation and NFD for hardware inventory, what is left to automate in the Fleet
-layer — or is automating it useless?*
+**Status: recommendation, 2026-09-01 — mostly adopted.** Answers: *given manual
+Talos installation and NFD for hardware inventory, what is left to automate in
+the Fleet layer — or is automating it useless?* Steps 4/5/7/8 below (machine
+config render+apply, disk tagging, zone labeling) are now built: `fleet/nodes.yaml`
+declares disk tags and zone per node and Terraform applies them, so nothing
+about them is manual any more. Netboot (step 2) is still deferred, per the ADR's
+"staged" answer.
 
 **Not useless. Close to the opposite.** `target-architecture.md` §9.1 describes
 joining a machine in nine steps. **Netboot is step 2.** The other eight are where
@@ -28,8 +32,8 @@ today:
 | 4 | render machine config: role, disks, `certSANs`, CA + join token, endpoint | Terraform | **already built** |
 | 5 | apply it; Talos installs to disk, reboots, joins | Terraform | **already built** |
 | 6 | kubelet registers; DaemonSets land | Kubernetes | automatic |
-| 7 | **tag its disks in Longhorn** — SSD ▸ `fast`, HDD ▸ `bulk` | human today | **automatable now** (§3.2) |
-| 8 | **label it** `topology.kubernetes.io/zone=machine-N` | human today | **automatable now** (§3.2) |
+| 7 | **tag its disks in Longhorn** — SSD ▸ `fast`, HDD ▸ `bulk` | Terraform, from `fleet/nodes.yaml` | **built** |
+| 8 | **label it** `topology.kubernetes.io/zone=machine-N` | Terraform, from `fleet/nodes.yaml` | **built** |
 | 9 | replicas begin scheduling | Kubernetes | automatic |
 
 Steps 4 and 5 already exist: `terraform/modules/talos-cluster/talos.tf` carries

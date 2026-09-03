@@ -151,12 +151,13 @@ differently.
 
 **New clause for the kind-approval gate:** operator quality and zero-touch
 credentials are necessary but not sufficient — **the engine's resource
-footprint is part of the approval decision** (S10 applies to candidate
-engines, not just running components). This collides with CONCEPT.md §2's
-"educational wins" clause (Kafka is the industry-standard thing to learn);
-the reading offered here is that §8/S10 ("a platform that consumes its own
-machine has failed its purpose") outranks learning value — but it's a
-conscious call to record when a broker is actually proposed, not to settle
+footprint is part of the approval decision** (the platform's own resource
+budget applies to candidate engines, not just running components). This
+collides with CONCEPT.md's "educational wins" ground rule (Kafka is the
+industry-standard thing to learn); the reading offered here is that "a
+platform that consumes its own machine has failed its purpose" outranks
+learning value — but it's a conscious call to record when a broker is
+actually proposed, not to settle
 in the abstract.
 
 ## 5. D4 nuance: message data is probably not "durable"

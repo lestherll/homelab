@@ -1,13 +1,22 @@
-# Draft — D20: Single-model fleet, Talos on the metal
+# D20: Single-model fleet, Talos on the metal
 
-**Status: DRAFT.** Not accepted, not built, nothing depends on it.
+**Status: ACCEPTED, build in progress (2026-09-04).** Machine 2
+(`homelab-worker-0`) is live on bare-metal Talos — `clusters/homelab-metal/`,
+`terraform/modules/talos-metal/` and `infrastructure/longhorn/` are real, not
+proposed. Machine 1's cutover (§4.1's "the one rebuild") has not happened yet;
+see `AGENT.md`'s Description for the current split. This ADR is DONE when that
+rebuild lands and `clusters/homelab/` retires.
 
-This repo records decisions as `D`-numbers in `CONCEPT.md` §11, with long-form
-rationale in a `docs/*-design-notes.md` beside them (D18 → `talos-terraform-migration-notes.md`,
-D15 → `self-service-platform-design-notes.md`). This file is staged outside that
-structure deliberately: if accepted, the **Decision** section below becomes D20 in
-`CONCEPT.md` and the rest becomes `docs/fleet/single-model-fleet-design-notes.md`.
-Delete this file at that point rather than leaving a third copy.
+This repo used to record decisions as `D`-numbers in a `CONCEPT.md` decision
+log, with long-form rationale in a `docs/*-design-notes.md` beside them (D18 →
+`talos-terraform-migration-notes.md`, D15 → `self-service-platform-design-notes.md`)
+— that decision log has since moved to git history; `CONCEPT.md` is now a
+short concept pitch, with no numbered log for a new decision to be promoted
+into. So the promotion this file originally described (become D20 in
+`CONCEPT.md`, its body become `single-model-fleet-design-notes.md`, this file
+deleted) no longer has a destination. **This ADR is now the permanent record**
+— its own Status line above is what tracks acceptance and progress, the same
+way every ADR after it will.
 
 ---
 

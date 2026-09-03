@@ -1,10 +1,12 @@
 # The actual machines, and what they invalidate
 
-**Status: research/measurement, 2026-08-31. Nothing built.** Written after the
+**Status: research/measurement, 2026-08-31 — since encoded.** Written after the
 operator named the hardware, which turns several open questions in
 `docs/adr/0001-single-model-talos-fleet.md` and `docs/fleet/target-architecture.md`
 from *assumptions* into *facts*. Three of those facts are unwelcome, and one of
-them is a genuine asset that the design has no slot for.
+them is a genuine asset that the design has no slot for. The measurements below
+are now what `fleet/nodes.yaml` encodes per node — that file is the live
+source, this document is why it looks the way it does.
 
 It also closes the one action item left by `docs/fleet/tinkerbell-investigation.md`
 — *"check whether the mini-PCs have Intel vPro/AMT"* — **negative, on both

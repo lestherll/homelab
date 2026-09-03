@@ -1,9 +1,9 @@
 # Inventory, discovery and provisioning — the recommended approach
 
-**Status: recommendation, 2026-08-31. Nothing built.** Answers "what should we
-actually do now?" given everything the preceding investigations established:
-Metal³ is out (`metal3-investigation.md`), Tinkerbell is right but its value is
-the netboot layer and netboot is deferred (`tinkerbell-investigation.md`), the
+**Status: recommendation, 2026-08-31.** Answers "what should we actually do
+now?" given everything the preceding investigations established: Metal³ is
+out (`metal3-investigation.md`), Tinkerbell is right but its value is the
+netboot layer and netboot is deferred (`tinkerbell-investigation.md`), the
 fleet is two mismatched machines with no BMC and no path to one
 (`hardware-fit-notes.md`), and the first machines are being installed from USB.
 
@@ -12,6 +12,14 @@ reconciled inventory of cluster members; keep a small hand-written node list in
 git for machines that aren't members yet; and leave provisioning where D20
 already puts it — Terraform's `siderolabs/talos` provider — until netboot is
 worth building.**
+
+> **The hand-written-list half is built, as `fleet/nodes.yaml`** — every
+> hardware fact (role, zone, MAC, address, disk selector, Longhorn disk
+> tags) for every node lives there now, consumed by
+> `terraform/clusters/homelab-metal/` via `yamldecode`, exactly the shape
+> this page describes. **The Node Feature Discovery half is not built** —
+> the sections below describing NFD are still the recommendation, not the
+> current state.
 
 ---
 
