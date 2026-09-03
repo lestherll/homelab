@@ -25,3 +25,17 @@ creation_rules:
   # and no SSH. Encrypted whole, for the same reason as the rule above.
   - path_regex: terraform/clusters/.*/talos-secrets\.sops\.ya?ml$
     age: age1qr7amd9hzgd5eql673nxqt3pdf4c43pjk42dg7lfd9ern7uzrasqtf6gnc
+  # The Tailscale auth key that puts each Talos node on the tailnet, consumed
+  # as TF_VAR_tailscale_authkey (terraform/README.md). Only the value is
+  # encrypted, matching the infrastructure/ and ansible/ rules above rather
+  # than the whole-file rules for the PKI: this is one short-lived credential
+  # rather than a root secret, and keeping the key name legible is what makes a
+  # rotation diff readable.
+  #
+  # Rotation is expected, not exceptional — Tailscale caps auth-key lifetime at
+  # 90 days. It is also cheap: talos.tf sets TS_AUTH_ONCE=true, so a node that
+  # has already joined never re-reads the key, and an expired one costs nothing
+  # until the next node is built.
+  - path_regex: terraform/clusters/.*/tailscale-authkey\.sops\.ya?ml$
+    encrypted_regex: ^authkey$
+    age: age1qr7amd9hzgd5eql673nxqt3pdf4c43pjk42dg7lfd9ern7uzrasqtf6gnc

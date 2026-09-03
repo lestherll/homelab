@@ -76,6 +76,73 @@ terraform apply
 talosctl --nodes 10.10.0.10 kubeconfig
 ```
 
+## First run — `clusters/homelab-metal`
+
+The metal cluster has no libvirt provider and so no local socket, which is what
+makes it applyable **from the Mac** rather than only from machine 1.
+
+```bash
+cd terraform/clusters/homelab-metal
+export TF_VAR_machine_secrets="$(sops --decrypt --output-type json machine-secrets.sops.json)"
+export TF_VAR_google_operator_email="ljllacuna5@gmail.com"
+export TF_VAR_tailscale_authkey="$(sops --decrypt --extract '["authkey"]' tailscale-authkey.sops.yaml)"
+terraform init
+terraform apply
+```
+
+`sops` and the age key live on machine 1, not the Mac — so the three `export`s
+are produced there and carried over, or the apply runs there. Copying the age
+key to a second device to save an SSH hop spreads D12's single root key, which
+is a worse trade than the inconvenience.
+
+### The Tailscale auth key
+
+`TF_VAR_tailscale_authkey` is what puts each node on the tailnet in its own
+right, so that `talosctl` works off-LAN without a subnet router on another
+machine. Full rationale: `docs/fleet/talosctl-off-lan.md`.
+
+Mint it in the Tailscale admin console with exactly two properties, both
+load-bearing:
+
+- **Reusable** — one key configures every node in the `nodes` map.
+- **Tagged `tag:talos`** — this is the destination `tailscale-acl/policy.hujson`
+  grants `tcp:50000` on. A key without the tag produces a node that joins the
+  tailnet as a *user-owned device* and matches no grant, which reads as
+  "Tailscale is broken" rather than as a mis-minted key.
+
+Then store it:
+
+```bash
+cat > terraform/clusters/homelab-metal/tailscale-authkey.sops.yaml <<'EOF'
+authkey: tskey-auth-REPLACE-ME
+EOF
+sops --encrypt --in-place terraform/clusters/homelab-metal/tailscale-authkey.sops.yaml
+```
+
+`.sops.yaml` encrypts only the `authkey` value, so rotation diffs stay legible.
+
+Tailscale caps auth-key lifetime at **90 days**, so this will expire. That is
+survivable rather than urgent: the module sets `TS_AUTH_ONCE=true`, so a node
+that has already joined keeps its identity in `/var/lib/tailscale` across
+reboots and never re-reads the key. An expired key bites only a node being
+built or `reset` — which is when you would be minting one anyway.
+
+### Changing the installer image is not `terraform apply`
+
+`install_image` carries the Image Factory schematic, and **system extensions
+change only at install or upgrade**. Applying a config to an already-installed
+node does not re-run the installer: Terraform reports success, the machine
+config shows the new image, and the node keeps the old one silently. To land a
+schematic change on a live node:
+
+```bash
+talosctl --nodes homelab-worker-0.tailf4742d.ts.net \
+  upgrade --image factory.talos.dev/installer/<schematic-id>:v1.13.8
+```
+
+That is a reboot rather than a reinstall, and it rewrites kernel arguments —
+which is the only way to be rid of one.
+
 ## Destroy and recreate
 
 `terraform destroy && terraform apply` producing a clean cluster in minutes is

@@ -668,6 +668,17 @@ everything below:
 
 ### 10.1.1 Decide the Tailscale extension before this install, not after
 
+> **DECIDED 2026-09-03: the extension is IN.** Schematic
+> `708747e350d604ae9e57227d8dcf274091453ddb1097b765d4ea8884f1992c1f` carries it
+> alongside `iscsi-tools` and `util-linux-tools`, and
+> `terraform/modules/talos-metal/` renders the `ExtensionServiceConfig` and the
+> tailnet certSAN for every node in its `nodes` map. So the choice below is no
+> longer open, and a machine joining after this date inherits it by being added
+> to that map. See [talosctl-off-lan.md](talosctl-off-lan.md).
+>
+> The rest of this section is kept because its *reasoning* is what a third
+> machine's operator needs: the timing constraint it describes is permanent.
+
 A second prerequisite, added 2026-08-30, and it is a *timing* constraint rather
 than a blocker.
 

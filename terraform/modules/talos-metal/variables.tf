@@ -78,7 +78,15 @@ variable "install_image" {
     Image Factory installer reference, including the schematic ID.
 
     The schematic carries siderolabs/iscsi-tools and siderolabs/util-linux-tools,
-    which Longhorn needs to attach volumes at all (ADR 0001 §8.1).
+    which Longhorn needs to attach volumes at all (ADR 0001 §8.1), plus
+    siderolabs/tailscale, which is what puts each node on the tailnet in its own
+    right (docs/fleet/talosctl-off-lan.md).
+
+    The tailscale extension is NOT interchangeable with the rest of this
+    module's settings: system extensions change only at install or upgrade, so
+    var.tailnet_domain and var.tailscale_authkey below are inert on a node whose
+    installed image predates this schematic — the ExtensionServiceConfig lands,
+    names a service that does not exist, and nothing starts.
 
     Read terraform-on-bare-metal.md §3's second rule before changing this: the
     installed image changes by `talosctl upgrade`, NEVER by apply-config.
@@ -91,15 +99,98 @@ variable "install_image" {
 
 variable "extra_cert_sans" {
   description = <<-EOT
-    Additional certSANs beyond each node's own address and loopback.
+    Additional certSANs beyond each node's own address, its tailnet name and
+    loopback.
 
     Be generous: talos.tf in the sibling module records what a MISSING certSAN
     costs — talos_machine_bootstrap HANGS rather than errors, because the
     provider retries a failure that can never clear. Cheap to add, and not
     rebuild-only.
+
+    Each node's `<hostname>.<tailnet_domain>` is added automatically by talos.tf
+    and does NOT belong here. What does belong here is anything not derivable:
+    a future VIP, or a node's 100.x tailnet address if you ever want to dial one
+    by IP rather than by name.
   EOT
   type        = list(string)
   default     = []
+}
+
+variable "tailnet_domain" {
+  description = <<-EOT
+    The tailnet's MagicDNS domain, e.g. `tailf4742d.ts.net`.
+
+    This is what makes `talosctl` work off-LAN without pinning a single raw
+    address anywhere: each node's certSAN becomes `<hostname>.<tailnet_domain>`,
+    which is stable by construction — it is derived from the Talos hostname,
+    which this module also sets. A LAN address can be renumbered by a new
+    router; a MagicDNS name cannot.
+
+    Set to "" to build a cluster with no tailnet identity at all, which also
+    skips the ExtensionServiceConfig below. Not the intended mode — see
+    docs/fleet/talosctl-off-lan.md — but a cluster that has not been given an
+    auth key yet should fail on the auth key, not on a half-configured service.
+
+    NOT a secret: it is already in git in a dozen places (ansible/inventory/
+    hosts.ini, most of docs/), and knowing a tailnet's name grants nothing.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "tailscale_authkey" {
+  description = <<-EOT
+    Tailscale auth key for the nodes' `siderolabs/tailscale` extension.
+
+    Supplied out of band via TF_VAR_tailscale_authkey, the same pattern as
+    machine_secrets — it reaches the provider only through the ephemeral
+    machine configuration, so it is never written to tfstate.
+
+    Mint it **tagged** (`tag:talos`, matching var.tailscale_tags) and
+    **reusable**: one key configures every node in var.nodes. Tailscale caps
+    key lifetime at 90 days, so this WILL expire. That is survivable rather
+    than fatal because talos.tf sets TS_AUTH_ONCE=true: a node that has already
+    joined keeps its tailnet identity in /var/lib/tailscale across reboots and
+    never re-reads the key. An expired key only bites a node being built or
+    `reset` — which is exactly when you would be minting one anyway.
+
+    Required when tailnet_domain is set. There is no default: a silently
+    tailnet-less node is the failure this whole change exists to remove.
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
+
+  # Cross-variable validation, which needs Terraform 1.9+ — versions.tf already
+  # floors at 1.11. Without this the failure is the quiet one: the node builds,
+  # certSANs name a tailnet address it never obtains, and nothing says why until
+  # someone tries `talosctl` from off-LAN weeks later.
+  validation {
+    condition     = var.tailnet_domain == "" || var.tailscale_authkey != ""
+    error_message = "tailnet_domain is set, so tailscale_authkey must be too — export TF_VAR_tailscale_authkey (see terraform/README.md)."
+  }
+}
+
+variable "tailscale_tags" {
+  description = <<-EOT
+    ACL tags each node advertises, as `--advertise-tags`.
+
+    This is the destination the tailnet policy grants on. A TAG rather than an
+    address is the point: `tailscale-acl/policy.hujson` names `tag:talos` and
+    keeps working when a node is renumbered, renamed or replaced, whereas its
+    old `hosts` entry for the VM pinned `10.10.0.10` and has to be re-edited
+    every time that address moves.
+
+    The auth key must be authorised for these tags, and `tagOwners` in
+    policy.hujson must list an owner who may mint them.
+  EOT
+  type        = list(string)
+  default     = ["tag:talos"]
+
+  validation {
+    condition     = alltrue([for t in var.tailscale_tags : startswith(t, "tag:")])
+    error_message = "Tailscale tags must be written in full, as tag:<name>."
+  }
 }
 
 variable "machine_secrets" {
