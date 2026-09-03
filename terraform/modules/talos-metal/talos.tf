@@ -130,6 +130,39 @@ locals {
           extraArgs = {
             rotate-server-certificates = "true"
           }
+
+          # Keep the node's Kubernetes identity OFF the tailnet.
+          #
+          # Unset, Talos deduces validSubnets from the service CIDRs, which
+          # comes out as "any address of the right family" — so the kubelet
+          # picks by sort order, and `100.105.86.101/32` sorts ahead of
+          # `192.168.0.221/24`. Measured 2026-09-03: after the reboot that
+          # installed the tailscale extension, the node's InternalIP silently
+          # became the tailnet address, taking node-exporter's Endpoint and
+          # Longhorn's node address with it.
+          #
+          # Consequences, neither of which reports itself: the node's cluster
+          # identity depends on tailscaled (and so on an auth key capped at 90
+          # days), and once machine 1 joins, Longhorn replica sync between two
+          # boxes on the same switch would run through WireGuard.
+          #
+          # THE FORM MATTERS. net.FilterIPs starts from an EMPTY set: a
+          # positive CIDR adds, a negative one subtracts. A negatives-only list
+          # therefore matches NOTHING, and the kubelet logs "no suitable node
+          # IP found" and sets no --node-ip at all. Positive base first, then
+          # subtract.
+          #
+          # No LAN address appears here on purpose — this is the whole point.
+          # `0.0.0.0/0` means "whatever IPv4 this machine has on whatever
+          # network it is plugged into", so a house move, a new router or a new
+          # subnet needs no edit. Pod and service CIDRs need no entry either:
+          # Talos always excludes them (nodeip_config.go), as it does any VIP.
+          nodeIP = {
+            validSubnets = [
+              "0.0.0.0/0",      # any IPv4 the node actually has
+              "!100.64.0.0/10", # ...except Tailscale's CGNAT range
+            ]
+          }
           # Longhorn's data paths must be visible to the kubelet, and rshared
           # so volume mounts propagate.
           extraMounts = [
@@ -166,6 +199,27 @@ locals {
             mountPath = "/etc/kubernetes/auth"
             readonly  = true
           }]
+        }
+
+        # The same rule for etcd's advertised peer address, and NOT decorative
+        # even on one member: measured 2026-09-03, etcd was already advertising
+        # `https://100.105.86.101:2380`. One member never dials its own peer
+        # URL, so nothing is broken today — but machine 1 would replicate etcd
+        # over WireGuard, and changing this with one member is far cheaper than
+        # renegotiating a peer URL with quorum to preserve.
+        #
+        # Same filter semantics as machine.kubelet.nodeIP above (both call
+        # net.FilterIPs), so the same positive-base-then-subtract form applies.
+        # etcd's candidate list is already the no-k8s one, so pod and service
+        # CIDRs need no entry.
+        #
+        # NOTE this restarts etcd on apply, which on a single control plane is
+        # a brief apiserver outage. Sequence it deliberately.
+        etcd = {
+          advertisedSubnets = [
+            "0.0.0.0/0",
+            "!100.64.0.0/10",
+          ]
         }
 
         # Cilium-only (cilium-only-networking.md). Both of these are Talos
