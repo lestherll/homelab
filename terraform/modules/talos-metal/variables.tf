@@ -193,6 +193,36 @@ variable "tailscale_tags" {
   }
 }
 
+variable "dial_over_lan" {
+  description = <<-EOT
+    Force Terraform to reach the nodes by LAN address instead of tailnet name.
+
+    Default false, i.e. **Terraform applies from anywhere** — which is the
+    point of this platform and was the last control plane still tied to the
+    house. `talosctl` and `kubectl` both went network-independent in
+    docs/fleet/talosctl-off-lan.md; this closes the gap.
+
+    Set true for the two cases where a node genuinely has no tailnet identity,
+    both of which are hands-on anyway:
+
+      * A FIRST BUILD. The node is in maintenance mode, the tailscale
+        extension is not configured, and no auth key has been applied.
+      * A REBUILD after `terraform destroy`. `on_destroy` resets the node,
+        which wipes /var/lib/tailscale along with STATE, so the machine drops
+        off the tailnet and comes back reachable only on the LAN.
+
+    Note this is NOT symmetric with talosctl. A talosconfig takes a LIST of
+    endpoints and the client fails over between them — verified 2026-09-03 that
+    it tolerates both an unreachable endpoint and an entirely unresolvable one,
+    in either order — so an operator can list the tailnet name and the LAN
+    address together and never think about it again. The provider's
+    `talos_machine_configuration_apply.endpoint` is a single string, so here
+    the choice has to be made explicitly.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "machine_secrets" {
   description = "Talos PKI, supplied from SOPS. Never a talos_machine_secrets resource — see talos.tf."
   type        = any

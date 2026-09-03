@@ -41,6 +41,24 @@ locals {
   tailnet_names = {
     for k, v in var.nodes : k => local.tailnet_enabled ? "${k}.${var.tailnet_domain}" : null
   }
+
+  # WHERE TERRAFORM DIALS, per node — the last control plane that was still
+  # tied to the house.
+  #
+  # This is the endpoint/node distinction talosctl draws, in the provider's
+  # spelling: `endpoint` is the address DIALLED, `node` is a routing header
+  # apid resolves on the node itself. So the endpoint can be a MagicDNS name
+  # and the node cannot — apid resolves with machine.network.nameservers,
+  # which do not know .ts.net.
+  #
+  # Defaults to the tailnet name so that `terraform apply` works from
+  # anywhere; var.dial_over_lan is the escape hatch for the two maintenance
+  # -mode cases, which are hands-on regardless. See variables.tf.
+  dial_endpoints = {
+    for k, v in var.nodes : k => (
+      var.dial_over_lan || !local.tailnet_enabled ? v.ip : local.tailnet_names[k]
+    )
+  }
 }
 
 # Gap four (§5): with cluster.network.cni.name=none the node is NotReady until
@@ -273,10 +291,12 @@ resource "terraform_data" "maintenance_ready" {
     command     = <<-EOT
       i=0
       while [ $i -lt 60 ]; do
-        if nc -z -w2 ${each.value.ip} 50000 2>/dev/null; then exit 0; fi
+        for target in ${local.dial_endpoints[each.key]} ${each.value.ip}; do
+          if nc -z -w2 "$target" 50000 2>/dev/null; then exit 0; fi
+        done
         i=$((i+1)); sleep 5
       done
-      echo "not reachable on ${each.value.ip}:50000 after 5m — is ${each.key} powered on and in maintenance mode?" >&2
+      echo "not reachable on ${local.dial_endpoints[each.key]}:50000 or ${each.value.ip}:50000 after 5m — is ${each.key} powered on and in maintenance mode?" >&2
       exit 1
     EOT
   }
@@ -411,10 +431,19 @@ ephemeral "talos_machine_configuration" "node" {
   )
 }
 
+# This feeds the GENERATED talosconfig, not the dial target of the resources
+# below (client_configuration carries only certificates). Both the tailnet
+# names and the LAN addresses are listed because the talos CLIENT takes a list
+# and fails over between them — verified 2026-09-03 that it tolerates an
+# unreachable endpoint AND an entirely unresolvable one, in either order. So a
+# talosconfig built from this works on the LAN, off it, and during a build.
+#
+# `nodes` stays addresses only: a node value is resolved by apid ON the node,
+# where .ts.net does not resolve.
 ephemeral "talos_client_configuration" "cluster" {
   cluster_name    = var.cluster_name
   machine_secrets = local.machine_secrets
-  endpoints       = [var.cluster_endpoint_ip]
+  endpoints       = concat(compact(values(local.tailnet_names)), [for k, v in var.nodes : v.ip])
   nodes           = [for k, v in var.nodes : v.ip]
 }
 
@@ -424,7 +453,12 @@ resource "talos_machine_configuration_apply" "node" {
   # _wo (write-only): sent to the provider, never recorded in state.
   client_configuration_wo        = ephemeral.talos_client_configuration.cluster.client_configuration
   machine_configuration_input_wo = ephemeral.talos_machine_configuration.node[each.key].machine_configuration
-  node                           = each.value.ip
+
+  # endpoint = dialled (a name works). node = routing header resolved by apid
+  # on the node (a name does NOT). Getting these the same way round is what
+  # makes a remote apply possible at all.
+  endpoint = local.dial_endpoints[each.key]
+  node     = each.value.ip
 
   # Returns the machine to maintenance mode on destroy, which restores the
   # rehearsal property the VM had and bare metal otherwise loses. NOTE its
@@ -447,7 +481,13 @@ resource "talos_machine_configuration_apply" "node" {
 # what guarantees "one".
 resource "talos_machine_bootstrap" "cluster" {
   client_configuration_wo = ephemeral.talos_client_configuration.cluster.client_configuration
-  node                    = var.nodes[local.controlplane_node].ip
+
+  # Bootstrap only ever happens on a first build, when var.dial_over_lan is
+  # necessarily true, so this resolves to the LAN address in practice. Written
+  # through the same local anyway rather than hardcoded, so the two cannot
+  # drift apart.
+  endpoint = local.dial_endpoints[local.controlplane_node]
+  node     = var.nodes[local.controlplane_node].ip
 
   depends_on = [talos_machine_configuration_apply.node]
 
