@@ -135,6 +135,46 @@ that has already joined keeps its identity in `/var/lib/tailscale` across
 reboots and never re-reads the key. An expired key bites only a node being
 built or `reset` — which is when you would be minting one anyway.
 
+### Applying from off the LAN
+
+`terraform apply` works from anywhere on the tailnet. Nothing extra to pass —
+the module dials `<hostname>.<tailnet_domain>` by default.
+
+This was the last control plane still tied to the house. `talosctl` and
+`kubectl` went network-independent first (`docs/fleet/talosctl-off-lan.md`), and
+Terraform stayed behind because the module addressed nodes by their static LAN
+address.
+
+The mechanism is the endpoint/node split, in the provider's spelling:
+
+| | dialled by | may be a MagicDNS name? |
+|---|---|---|
+| `endpoint` | your machine | **yes** |
+| `node` | apid, **on the node** | **no** — its resolver is `machine.network.nameservers`, which has no `.ts.net` |
+
+Two cases need `dial_over_lan = true`, and both are hands-on anyway:
+
+- **A first build.** The node is in maintenance mode with no tailscale
+  extension configured and no auth key applied.
+- **A rebuild after `terraform destroy`.** `on_destroy` resets the node, which
+  wipes `/var/lib/tailscale` along with STATE, so it drops off the tailnet.
+
+```bash
+terraform apply -var dial_over_lan=true      # first build / post-reset rebuild
+```
+
+Note the asymmetry with `talosctl`, which needs no such flag: a talosconfig
+takes a **list** of endpoints and the client fails over between them — verified
+2026-09-03 that it tolerates an unreachable endpoint *and* an entirely
+unresolvable one, in either order. So list both and forget about it:
+
+```bash
+talosctl config endpoint homelab-worker-0.tailf4742d.ts.net 192.168.0.221
+```
+
+The provider's `endpoint` is a single string, which is why the choice is
+explicit on the Terraform side.
+
 ### Changing the installer image is not `terraform apply`
 
 `install_image` carries the Image Factory schematic, and **system extensions
