@@ -41,6 +41,16 @@ variable "google_operator_email" {
   sensitive   = true
 }
 
+variable "tailscale_authkey" {
+  description = <<-EOT
+    Reusable, `tag:talos`-tagged Tailscale auth key for the nodes' tailscale
+    extension. Supplied via TF_VAR_tailscale_authkey from
+    tailscale-authkey.sops.yaml — see terraform/README.md.
+  EOT
+  type        = string
+  sensitive   = true
+}
+
 module "cluster" {
   source = "../../modules/talos-metal"
 
@@ -52,16 +62,33 @@ module "cluster" {
   talos_version      = "v1.13.8"
   kubernetes_version = "v1.36.2"
 
-  # Schematic 3cbae7e7… carries siderolabs/iscsi-tools and
-  # siderolabs/util-linux-tools. It ALSO carries a leftover
-  # `talos.config=http://192.168.0.44:8080/config.yaml` kernel argument from
-  # machine 2's original unattended install. That argument is consulted only
-  # when STATE holds no config — which is exactly what a `talosctl reset`
-  # produces, so it is dormant rather than inert. Measured 2026-09-02: with
-  # STATE wiped the node fetches from that URL and will NOT fall back to
-  # maintenance mode when the fetch fails. Drop it with `talosctl upgrade`,
-  # which rewrites kernel arguments; do not carry it onto machine 1.
-  install_image = "factory.talos.dev/installer/3cbae7e742190fc042097d7e9828d973b2392e81338085441aa7a7087e3d83b5:v1.13.8"
+  # Schematic 708747e3… — minted and read back 2026-09-03 from exactly this
+  # customization, whose content hash IS the ID, so it is re-mintable rather
+  # than an opaque handle:
+  #
+  #   customization:
+  #     systemExtensions:
+  #       officialExtensions:
+  #         - siderolabs/iscsi-tools
+  #         - siderolabs/tailscale
+  #         - siderolabs/util-linux-tools
+  #
+  # Two changes from its predecessor 3cbae7e7…, and BOTH need the same
+  # `talosctl upgrade` to land — apply-config never re-runs the installer:
+  #
+  #   + siderolabs/tailscale, which is what makes `talosctl` reachable off-LAN
+  #     (docs/fleet/talosctl-off-lan.md). siderolabs/tailscale is v1.98.9 at
+  #     v1.13.8, matching the operator's client version elsewhere in the repo.
+  #
+  #   - the leftover `talos.config=http://192.168.0.44:8080/config.yaml` kernel
+  #     argument from machine 2's original unattended install. It is consulted
+  #     only when STATE holds no config — which is exactly what a `talosctl
+  #     reset` produces, so it was dormant rather than inert. Measured
+  #     2026-09-02: with STATE wiped the node fetched from that URL and did NOT
+  #     fall back to maintenance mode when the fetch failed, leaving a node with
+  #     no API at all. `talosctl upgrade` rewrites kernel arguments, so this is
+  #     the change that is finally rid of it; do not carry it onto machine 1.
+  install_image = "factory.talos.dev/installer/708747e350d604ae9e57227d8dcf274091453ddb1097b765d4ea8884f1992c1f:v1.13.8"
 
   # Machine 2 alone. Machine 1 joins as a WORKER once cabled (Talos has no
   # 802.11 support at all), and HA still waits for a third machine.
@@ -76,9 +103,23 @@ module "cluster" {
     }
   }
 
+  # The tailnet, which is how `talosctl` reaches this node from off-LAN.
+  #
+  # This is deliberately a DOMAIN and not an address. Every node's certSAN and
+  # MagicDNS name is derived as `<hostname>.<tailnet_domain>`, so nothing here
+  # has to be re-edited when the LAN is renumbered — the failure mode the old
+  # `talos-cp-01: 10.10.0.10` pin in tailscale-acl/policy.hujson has. Not a
+  # secret: the tailnet name is already in git in ansible/inventory/hosts.ini.
+  tailnet_domain    = "tailf4742d.ts.net"
+  tailscale_authkey = var.tailscale_authkey
+
   # Machine 1's future WIRED address is deliberately absent: it is not yet
   # known, because enp2s0 has never held a lease. Adding it later regenerates
   # the affected leaf certificates in seconds with no reboot.
+  #
+  # The nodes' tailnet names are absent for a different reason — talos.tf adds
+  # them automatically from tailnet_domain, and repeating one here would be the
+  # kind of duplicate that survives a rename.
   extra_cert_sans = []
 
   # ONE disk carrying BOTH tags — not two disks, and that correction was
@@ -121,4 +162,9 @@ output "cluster_endpoint" {
 
 output "node_ips" {
   value = module.cluster.node_ips
+}
+
+output "talos_endpoints" {
+  description = "What `talosctl config endpoint` should name — see docs/fleet/talosctl-off-lan.md."
+  value       = module.cluster.talos_endpoints
 }

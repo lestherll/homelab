@@ -18,28 +18,39 @@ the wrong file.
 ## What the tailnet permits
 
 Tailscale's default blanket grant (`{"src":["*"],"dst":["*"],"ip":["*"]}`) is
-gone. Three rules replace it:
+gone. Six rules replace it:
 
 | Source | Destination | Ports |
 | --- | --- | --- |
 | the operator's own devices | each other (`autogroup:self`) | everything |
 | the operator's own devices | `tag:k8s` — every proxy the operator creates | `tcp:80`, `tcp:443` |
-| `tag:ci` | `svc:kube-apiserver-ci` | `tcp:443` |
+| `tag:ci` | `svc:kube-apiserver-metal` | `tcp:443` |
+| the operator's own devices | `svc:kube-apiserver-metal` | `tcp:443` |
+| the operator's own devices | `tag:talos` — the Talos nodes themselves | `tcp:50000` |
+| the operator's own devices | `talos-cp-01` (superseded, dies with machine 1) | `tcp:50000` |
 
-Two consequences worth knowing before debugging a connection that hangs:
+Three consequences worth knowing before debugging a connection that hangs:
 
-- **A grant on `tag:k8s` is not a grant on `svc:kube-apiserver-ci`.** Device
+- **A grant on `tag:k8s` is not a grant on `svc:kube-apiserver-metal`.** Device
   grants and service grants are separate, which is why CI reaching the apiserver
   needs its own rule and gets no access to any app from it.
 - **Tailscale SSH needs a grant, not just the `ssh` block.** The `ssh` block
   decides who may open a session and as which local user; `tcp:22` reachability
   comes from the first rule above. Delete that rule and SSH to the host stops
   working, with nothing in the `ssh` block hinting why.
+- **The port list on `tag:talos` is the entire security boundary.** A Talos node
+  is a tailnet device in its own right, so unlike the subnet-routed
+  `talos-cp-01` row there is no route to withhold as well. `:9100` on a node is
+  unauthenticated node-exporter; widening `tcp:50000` to `["*"]` publishes it to
+  every device on the tailnet. The `tests` block denies it, and five other
+  ports, so that widening cannot pass silently.
 
-Not granted, deliberately: users reaching `svc:kube-apiserver-ci` (that is human
-cluster access, and it needs an auth model settled first), anything reaching
-`tag:k8s-operator`, and any outbound rule for the proxies — they receive
-connections and originate none over the tailnet.
+Not granted, deliberately: anything reaching `tag:k8s-operator`; any outbound
+rule for the proxies (they receive connections and originate none over the
+tailnet); and `tcp:6443` on `tag:talos`, which would be a break-glass `kubectl`
+that does not route through an in-cluster proxy — wanted, but it needs an
+apiserver certSAN alongside it and is a decision worth taking on its own
+(`docs/fleet/talosctl-off-lan.md` §8).
 
 ## Changing the policy
 

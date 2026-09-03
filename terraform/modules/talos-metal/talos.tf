@@ -29,6 +29,18 @@ locals {
   # config so it is present BEFORE Longhorn first registers the node. See
   # variables.tf — this is the setting whose cost, if wrong, is a rebuild.
   longhorn_disks_config = jsonencode(var.longhorn_disks)
+
+  tailnet_enabled = var.tailnet_domain != ""
+
+  # Each node's MagicDNS name, DERIVED rather than configured. TS_HOSTNAME
+  # below is set to the same `each.key` that HostnameConfig sets, so this is
+  # not a guess about what Tailscale will pick — it is the value we hand it.
+  #
+  # Deriving it is the whole point: this is the one address in the module that
+  # a new router, a new DHCP scope or a renumbered LAN cannot invalidate.
+  tailnet_names = {
+    for k, v in var.nodes : k => local.tailnet_enabled ? "${k}.${var.tailnet_domain}" : null
+  }
 }
 
 # Gap four (§5): with cluster.network.cni.name=none the node is NotReady until
@@ -247,7 +259,18 @@ ephemeral "talos_machine_configuration" "node" {
             # node. Changing the installed image is `talosctl upgrade`.
             image = var.install_image
           }
-          certSANs = [each.value.ip]
+          # Talos APPENDS list values across patches rather than replacing
+          # them, which is why 127.0.0.1/localhost from common_patches survive
+          # this entry rather than being overwritten by it.
+          #
+          # The tailnet name is what `talosctl config endpoint` is pointed at
+          # off-LAN, and TLS is verified against the name DIALLED — so omitting
+          # it does not degrade to "works but unverified", it fails every
+          # authenticated call with "certificate is valid for <ip>, not
+          # <name>". The node's own 100.x address is deliberately NOT here: it
+          # is not known until the node first joins, and dialling by name means
+          # nothing ever needs it.
+          certSANs = compact([each.value.ip, local.tailnet_names[each.key]])
           network = {
             # By MAC, never by name. An interfaces entry naming a device that
             # does not exist is ignored SILENTLY, and the failure mode is a
@@ -266,6 +289,59 @@ ephemeral "talos_machine_configuration" "node" {
         }
       }),
     ],
+
+    # The tailnet identity: a separate v1alpha1 DOCUMENT, not a v1alpha1 field,
+    # so it is its own patch exactly like HostnameConfig above.
+    #
+    # WHY THE NODE AND NOT A SUBNET ROUTER: the alternative is machine 1
+    # advertising the LAN as a subnet route, which routes the bare-metal node's
+    # ONLY diagnostic path through a different machine — and "machine 1 is
+    # down" is a case you actively want talosctl for
+    # (fleet-provisioning-design-notes.md §6.4). It also dies with machine 1.
+    #
+    # THE PORT LIST IS THE SECURITY BOUNDARY, NOT THE ROUTE. Putting the node
+    # on the tailnet puts its whole listening surface one grant away, and it is
+    # not all authenticated: measured 2026-09-03, :9100 on this node answers
+    # HTTP 200 with no auth at all (node-exporter, hostNetwork, privileged
+    # namespace). policy.hujson grants tcp:50000 and nothing else, and its
+    # tests block denies the rest so a widening cannot pass silently.
+    !local.tailnet_enabled ? [] : [
+      yamlencode({
+        apiVersion = "v1alpha1"
+        kind       = "ExtensionServiceConfig"
+        name       = "tailscale"
+        environment = [
+          "TS_AUTHKEY=${var.tailscale_authkey}",
+
+          # Same value as HostnameConfig above, so the MagicDNS name is
+          # `<node>.<tailnet_domain>` — the derived, renumber-proof handle in
+          # local.tailnet_names, and the certSAN issued two patches up.
+          "TS_HOSTNAME=${each.key}",
+
+          # containerboot's default is FALSE, which means it runs
+          # `tailscale up --authkey` on EVERY service start. Talos restarts
+          # this service on every boot, so the default quietly makes each
+          # reboot depend on a key Tailscale caps at 90 days — a node that
+          # rebooted after expiry would drop off the tailnet with the machine
+          # config still looking correct. Verified against containerboot
+          # v1.98.9 (settings.go: defaultBool("TS_AUTH_ONCE", false)).
+          "TS_AUTH_ONCE=true",
+
+          # Belt and braces: this is containerboot's behaviour when the var is
+          # unset (AcceptDNS is a *bool; nil renders --accept-dns=false), but
+          # it is upstream's default rather than ours, and the consequence of
+          # it flipping is the node's resolver silently becoming MagicDNS on a
+          # single control plane. machine.network.nameservers is meant to be
+          # the only thing that decides this.
+          "TS_ACCEPT_DNS=false",
+
+          # The ACL destination. A tag rather than an address is what lets
+          # policy.hujson survive this node being renumbered or replaced.
+          "TS_EXTRA_ARGS=--advertise-tags=${join(",", var.tailscale_tags)}",
+        ]
+      })
+    ],
+
     # The seed goes on CONTROL-PLANE configs only, and identical across them —
     # Sidero's own Cilium guide is explicit about both.
     each.value.machine_type != "controlplane" ? [] : [

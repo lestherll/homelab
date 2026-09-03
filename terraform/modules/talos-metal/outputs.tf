@@ -13,6 +13,19 @@ output "controlplane_node" {
   value       = local.controlplane_node
 }
 
+output "talos_endpoints" {
+  description = <<-EOT
+    What to point `talosctl config endpoint` at, keyed by hostname.
+
+    MagicDNS names once tailnet_domain is set, LAN addresses otherwise. Names
+    rather than addresses on purpose: `talosctl` verifies TLS against the value
+    it DIALS, and a name is the half of that pair the LAN cannot renumber.
+
+    Safe as an output — unlike a talosconfig this is a hostname, not PKI.
+  EOT
+  value       = { for k, v in var.nodes : k => coalesce(local.tailnet_names[k], v.ip) }
+}
+
 # Deliberately NOT an output: kubeconfig and talosconfig. Both embed the PKI,
 # and an output is stored in state — which is the one thing this module's
 # design exists to prevent. Generate them from the SOPS-encrypted secrets

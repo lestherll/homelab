@@ -5,7 +5,13 @@ on the LAN and the question became not *what should this one machine run* but
 *what shape lets any number of machines be added without re-deciding each time*.
 
 **Partly executed since — [§8](#8-sequencing)'s M1 is under way, so the present
-tense below is the pre-change state, not today's.** Built: M1.1 (`late-commands`
+tense below is the pre-change state, not today's.** Also built, out of order and
+ahead of M2: [§6.4](#64-the-three-options)'s option (c), the Tailscale system
+extension on each Talos node — see [talosctl-off-lan.md](talosctl-off-lan.md).
+That resolves §6.2's *"remote `talosctl` does not work today"* for the metal
+cluster without waiting for the bridged rebuild, because a tailnet device needs
+no subnet route. §6.4.1's asymmetry — reachability solved for every device,
+credentials solved for none — is unchanged and still the honest limit. Built: M1.1 (`late-commands`
 NOPASSWD drop-in), M1.2 (machine 1's planted by hand), and the *SSH half* of
 M1.3 — `hosts.ini` no longer says `ansible_connection=local`, and `ansible.cfg`,
 AGENT.md and `converge.yml` have dropped the `sudo -v` ritual and the top-level
@@ -505,7 +511,10 @@ is a case you actively want `talosctl` for.
 not cover subnet-route destinations. It shares (a)'s single point of failure for
 one machine's worth of work.
 
-**(c) is the recommendation**, and it forces a decision the repo has so far
+**(c) is the recommendation** — **taken 2026-09-03**, and built in
+[talosctl-off-lan.md](talosctl-off-lan.md); the remainder of this subsection is
+the argument that was made for it, kept because §6.4.1 below still qualifies
+what it does and does not deliver. It forced a decision the repo had so far
 deferred rather than made. `terraform/scripts/stage-talos-image.sh` rejects the
 Tailscale extension in a comment: *"Tailscale stays on the host, which keeps one
 tailnet identity and dissolves the certSANs chicken-and-egg."* That rationale is

@@ -16,10 +16,23 @@
     // per-repo isolation is enforced in the cluster by an admission policy
     // reading the runner's GitHub-signed OIDC claims, so onboarding a new app
     // needs no change to this file.
+    // tag:talos is worn by a Talos NODE itself, via the siderolabs/tailscale
+    // system extension baked into its installer image — not by anything running
+    // inside the cluster. It is the destination for the machine API (:50000),
+    // which is the only way into a node with no shell and no SSH, so it must
+    // keep working when the cluster does not.
+    //
+    // Deliberately a TAG rather than a "hosts" entry. The VM's machine API was
+    // reached through `talos-cp-01: 10.10.0.10` below, which has to be re-edited
+    // every time that address moves; a tag survives a node being renumbered,
+    // renamed or replaced, and covers machine 1 the day it joins with no change
+    // here. The nodes advertise it themselves — see TS_EXTRA_ARGS in
+    // terraform/modules/talos-metal/talos.tf.
     "tagOwners": {
         "tag:k8s-operator": [],
         "tag:k8s":          ["tag:k8s-operator"],
         "tag:ci":           ["autogroup:admin"],
+        "tag:talos":        ["autogroup:admin"],
     },
 
     // Named IPs, referenced only by the `tests` block at the bottom.
@@ -44,6 +57,14 @@
     // It is NOT reachable by virtue of appearing here — a named host is just a
     // label. Reachability comes from machine 1 advertising 10.10.0.0/24 as a
     // subnet router plus the grant below, and from nothing else.
+    // SUPERSEDED, and kept only while machine 1 exists: `talos-cp-01` is the
+    // VM's address on machine 1's host-only libvirt network, and reaching it
+    // needs machine 1 up as a subnet router. The metal nodes replaced that with
+    // `tag:talos` — a tag, so no address appears here at all and nothing has to
+    // be re-pinned when one moves. Delete this entry, the 10.10.0.0/24
+    // autoApprover, its grant and its two tests in the change that wipes
+    // machine 1; leaving them behind is a route advertised for a host that no
+    // longer exists.
     "hosts": {
         "homelab":     "100.121.11.84",
         "talos-cp-01": "10.10.0.10",
@@ -175,6 +196,38 @@
         // operator's own devices. Reachability is only half of access anyway —
         // apid still demands a client cert per device (LES-156).
         {"src": ["autogroup:member"], "dst": ["talos-cp-01"], "ip": ["tcp:50000"]},
+
+        // The same machine API on the METAL cluster, reached a different way:
+        // the node is a tailnet device in its own right, so there is no subnet
+        // route, no named host and no address in this file at all.
+        //
+        // That is the whole reason this rule replaces the one above rather than
+        // extending it. The rule above depends on machine 1 being up to
+        // advertise 10.10.0.0/24 — which routes the bare-metal node's ONLY
+        // diagnostic path through a different machine, and "machine 1 is down"
+        // is precisely when talosctl is wanted
+        // (docs/fleet/fleet-provisioning-design-notes.md §6.4).
+        //
+        // THE PORT LIST IS STILL THE SECURITY BOUNDARY, and now it is the ONLY
+        // boundary — a tailnet device has no subnet route to withhold. Audited
+        // on this node 2026-09-03, unchanged from the VM's audit above:
+        //
+        //    9100 node-exporter *** HTTP 200, NO AUTH ***  <- the reason for tcp:
+        //   10256 kube-proxy    unauthenticated
+        //   50000 apid          mTLS, Talos CA — no cert, no handshake
+        //    6443 apiserver     401 anonymous
+        //
+        // Widening this to ["*"] hands every tailnet device the node's full
+        // metric set. If a second port is ever needed — 6443 for a break-glass
+        // kubectl that does not depend on an in-cluster proxy is the likely one,
+        // and it needs a matching cluster.apiServer.certSANs entry — add that
+        // port, never the wildcard.
+        //
+        // Reachability is only half of access: apid still demands a client
+        // certificate per device, minted with `talosctl config new --roles
+        // os:reader --crt-ttl 720h` rather than by copying the admin config.
+        // Talos has no CRL, so a short TTL is the only revocation there is.
+        {"src": ["autogroup:member"], "dst": ["tag:talos"], "ip": ["tcp:50000"]},
 
         // Allow users in "group:example" to access "tag:example", but only from
         // devices that are running macOS and have enabled Tailscale client auto-updating.
@@ -309,6 +362,33 @@
         {
             "src":  "tag:ci",
             "deny": ["talos-cp-01:50000", "talos-cp-01:9100"],
+        },
+
+        // The same pair for the metal nodes, which are reached by TAG rather
+        // than through a subnet route. Same shape, same reasoning, and the
+        // denies matter more here: a tag has no route to withhold, so this
+        // port list is the only thing standing between an unauthenticated
+        // :9100 and every device on the tailnet.
+        //
+        // 22 is included though Talos runs no SSH at all — it asserts the rule
+        // is scoped to a port rather than to the device, which is exactly what
+        // replacing the list with ["*"] would undo.
+        {
+            "src":    "lestherll@github",
+            "accept": ["tag:talos:50000"],
+            "deny": [
+                "tag:talos:9100",
+                "tag:talos:10256",
+                "tag:talos:6443",
+                "tag:talos:2379",
+                "tag:talos:10250",
+                "tag:talos:22",
+            ],
+        },
+
+        {
+            "src":  "tag:ci",
+            "deny": ["tag:talos:50000", "tag:talos:9100", "tag:talos:6443"],
         },
     ],
 }
