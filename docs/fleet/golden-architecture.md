@@ -4,19 +4,20 @@
 what this system already is, names the boundaries it has been relying on
 unnamed, and states what those boundaries commit to.
 
-> **This file outlives the D20 ADR.** The ADR
+> **This file outlives the fleet-migration ADR.** The ADR
 > (`docs/adr/0001-single-model-talos-fleet.md`) is now Accepted and is its own
 > permanent record — no promotion into `CONCEPT.md` or a design-notes file, since
 > `CONCEPT.md` no longer carries a numbered decision log for it to be promoted
-> into. This document is not part of that record — D20 is a decision *inside*
-> this architecture, not the architecture itself.
+> into. This document is not part of that record — the fleet migration is a
+> decision *inside* this architecture, not the architecture itself.
 
 **Why it is being written now.** Four investigations in one sitting — Metal³,
 Tinkerbell, Tinkerbell + Cluster API, and the fleet's actual hardware — all
 landed in the same place, and **not one of them changed a file in
 `infrastructure/` or in the platform API.** That is the shape of the system
-showing through. The ADR has already made this argument twice, for D18 and again
-for D20, each time without naming the layers it was arguing about. Naming them
+showing through. The ADR has already made this argument twice, for the Talos
+VM cutover and again for the fleet migration, each time without naming the
+layers it was arguing about. Naming them
 turns a recurring rhetorical move into something checkable.
 
 ---
@@ -41,10 +42,10 @@ layer notices, which is why §4 is the section that matters.
 ┌─ PLATFORM API ─────────────────────────────────── the product ─┐
 │  Database    ObjectStorage    Application                      │
 │  kro ResourceGraphDefinitions · platform.homelab/v1alpha1      │
-│  consumers: app repos, self-registering (D16)                  │
+│  consumers: app repos, self-registering (zero-touch)           │
 │                                                                │
-│  D1's "Layer 0/1/2" (raw → templates → typed) is the           │
-│  THICKNESS of this layer, not a sibling of these three.        │
+│  The layer-promotion rule's 0/1/2 (raw → templates → typed) is │
+│  the THICKNESS of this layer, not a sibling of these three.    │
 └──────────────────────────┬─────────────────────────────────────┘
       ▲ contract: a typed resource containing no concept
       │           of a node, a disk or a machine
@@ -97,19 +98,19 @@ that record.
 
 ## 4. The evidence: this boundary has been tested three times
 
-### 4.1 D18 — k3s to Talos, executed 2026-08-16
+### 4.1 The Talos VM cutover — k3s to Talos, executed 2026-08-16
 
 The node platform was replaced underneath a running platform. App authors saw
-nothing. D18 called that *"the strongest available evidence the self-service
-abstraction (D15) was drawn in the right place."* **Infrastructure changed;
-Platform API did not.**
+nothing. That decision called this *"the strongest available evidence the
+self-service abstraction (the self-service platform API) was drawn in the
+right place."* **Infrastructure changed; Platform API did not.**
 
-### 4.2 D20 — hypervisor to bare metal, designed
+### 4.2 The fleet migration — hypervisor to bare metal, designed
 
 Six files in `infrastructure/` change. The Platform API's **spec surface** is
 nearly untouched: one visible change (`Application.spec.host` gains a cluster
 suffix) and one semantic one (`persistence.size` becomes a real limit). Full
-accounting in `platform-api-under-d20.md`.
+accounting in `platform-api-migration-impact.md`.
 
 The ADR originally overclaimed this as *"`infrastructure/` is untouched, not one
 file"* and was corrected. **The corrected version is the more useful claim,
@@ -166,8 +167,8 @@ nothing before now would have caught it.
 
 Worth stating plainly: four of these five are Infrastructure → Platform API, and
 all four arrive with the same change (the Longhorn migration). **Leaks cluster at
-migrations**, which is an argument for landing D20's Platform API changes in one
-revision, as `platform-api-under-d20.md` already recommends.
+migrations**, which is an argument for landing the fleet migration's Platform API changes in one
+revision, as `platform-api-migration-impact.md` already recommends.
 
 ## 6. Where the repo layout disagrees with the layering
 
@@ -210,12 +211,12 @@ direction, rather than being absorbed quietly.
 
 ## Related
 
-- `docs/adr/0001-single-model-talos-fleet.md` — D20, a **Fleet + Infrastructure**
+- `docs/adr/0001-single-model-talos-fleet.md` — the fleet migration, a **Fleet + Infrastructure**
   decision; its §10 is this document's §4 argued before the layers had names
 - `docs/fleet/target-architecture.md` — the detailed build-out of the Fleet and
-  Infrastructure layers under D20
-- `docs/fleet/platform-api-under-d20.md` — the Infrastructure → Platform API
-  boundary, priced
+  Infrastructure layers under the fleet migration
+- `docs/fleet/platform-api-migration-impact.md` — the
+  Infrastructure → Platform API boundary, priced
 - `docs/fleet/inventory-and-provisioning-approach.md` — the Fleet →
   Infrastructure boundary, and why inventory splits across it
 - `docs/fleet/fleet-control-plane-survey.md` — its "five planes" decompose the

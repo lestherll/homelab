@@ -2,12 +2,13 @@
 
 Status: **investigation only, nothing built.** Records what was verified on the
 live cluster on 2026-08-11, what it constrains, and what remains open. Distinct
-from `self-service-platform-design-notes.md`, which covers D15/D16 — those are
-about apps *inside* the platform. This is about consumers outside it.
+from `self-service-platform-design-notes.md`, which covers the self-service
+platform API and zero-touch app registration — those are about apps *inside*
+the platform. This is about consumers outside it.
 
 ## Context — the problem this is about
 
-D15 delivered `Database`/`ObjectStorage`/`Application`. Every endpoint the
+The self-service platform API delivered `Database`/`ObjectStorage`/`Application`. Every endpoint the
 platform hands out is cluster-internal:
 
 - `rgd-application.yaml` hardcodes `http://seaweed-s3.seaweedfs.svc:8333`.
@@ -243,7 +244,7 @@ Secondary implications, still valid regardless of how ACME is fixed:
   request within the consumer's own prefix succeeded, but the negative case (an
   unscoped bucket-root list, expected `AccessDenied`) was not re-run externally.
   Server-side IAM should make this identical to the in-cluster behaviour proven
-  during D15, but "should" is why it is listed here.
+  when the self-service platform API was built, but "should" is why it is listed here.
 - `DatabaseRole.clientCertificate` end-to-end, including `pg_hba` and driver
   support — the deepest unknown, and what decides whether the binding Secret
   contract can ever be uniform.

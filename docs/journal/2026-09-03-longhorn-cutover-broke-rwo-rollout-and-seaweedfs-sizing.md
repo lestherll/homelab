@@ -3,7 +3,7 @@
 **Date:** 2026-09-03 · **Tags:** storage, longhorn, platform-api, seaweedfs
 
 **Problem:** two things local-path-provisioner's behavior had been masking,
-both predicted in advance in `docs/fleet/platform-api-under-d20.md` and both
+both predicted in advance in `docs/fleet/platform-api-migration-impact.md` and both
 confirmed live when `fast`/`bulk` moved onto Longhorn for the D20 metal build.
 
 **Finding:**
@@ -34,6 +34,6 @@ follow-up — the failure modes give no signal pointing at the real cause
 **Validation:** `rgd-application.yaml` and `seaweed-cluster.yaml` both carry
 comments recording the reasoning at the point of change.
 
-**Ref:** `docs/fleet/platform-api-under-d20.md` (the impact note this
+**Ref:** `docs/fleet/platform-api-migration-impact.md` (the impact note this
 confirmed), commit `f107227` ("Build the D20 cluster on machine 2, and move
 fast/bulk onto Longhorn")

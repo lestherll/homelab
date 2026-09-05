@@ -1,4 +1,4 @@
-# Platform API under D20 — impact note
+# Platform API under the fleet migration — impact note
 
 **Status: resolved, 2026-09-04.** Written 2026-08-30 to record findings ahead
 of the fleet actually changing; the Longhorn cutover has since landed and all
@@ -82,7 +82,7 @@ multiply.
   Tailscale `parent-resource` labels, which is topology-independent in
   principle — but AGENT.md records that Cilium's CNI chaining has traps, and
   cross-node identity is where they would surface.
-- **What D20 unlocks**, stated once so it is not forgotten: `Database` can offer
-  real HA (`rgd-database.yaml`'s *"No HA… consistent with D3"* is a hardware
+- **What the fleet migration unlocks**, stated once so it is not forgotten: `Database` can offer
+  real HA (`rgd-database.yaml`'s *"No HA… consistent with the single-node design"* is a hardware
   constraint wearing a decision's clothes), draining a node stops being an
   outage, and a `VirtualMachine` kind becomes expressible.

@@ -30,7 +30,7 @@ spec:
     prometheus:
       prometheusSpec:
         # Deliberate reduction from the current podman stack's 30d, to fit
-        # D7's ~20%/~3GB budget with headroom for Loki's later addition.
+        # the observability budget's ~20%/~3GB target with headroom for Loki's later addition.
         # Cut from 15d for machine 2. The platform does not fit like-for-like
         # there — 6287 Mi measured against 7.2 GiB total — and observability is
         # where nearly all the slack is, almost all of it Prometheus
@@ -274,7 +274,7 @@ spec:
         dashboards:
           enabled: true
         # The two sidecars ship with no requests or limits at all, so they were
-        # invisible to D7's ~3GB observability budget while actually holding
+        # invisible to the ~3GB observability budget while actually holding
         # ~154Mi between them. They are ConfigMap watchers — steady-state RSS,
         # no growth path — so bounding them is about making the budget sum
         # honest, not about constraining them.
@@ -308,11 +308,12 @@ spec:
       # derived from the old 256Mi limit made it worse, not better).
       # Bumped again 2026-08-10: the 512Mi/200m limits from the first fix were
       # themselves exhausted once the CloudNativePG + SeaweedFS dashboards
-      # (D15) landed — observed steady-state at 200m/200m CPU (fully
-      # throttled) and 501Mi/512Mi memory, with live liveness/readiness probe
-      # failures and a prior OOMKill-shaped restart. New limits sized for
-      # ~1.5x that steady-state, and still comfortably inside D7's ~3GB
-      # observability budget (CONCEPT.md) alongside Prometheus/Alertmanager.
+      # (the self-service platform API) landed — observed steady-state at
+      # 200m/200m CPU (fully throttled) and 501Mi/512Mi memory, with live
+      # liveness/readiness probe failures and a prior OOMKill-shaped restart.
+      # New limits sized for ~1.5x that steady-state, and still comfortably
+      # inside the ~3GB observability budget (CONCEPT.md) alongside
+      # Prometheus/Alertmanager.
       resources:
         requests: { cpu: 100m, memory: 384Mi }
         limits: { cpu: 300m, memory: 768Mi }

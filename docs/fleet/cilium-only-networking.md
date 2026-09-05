@@ -62,7 +62,7 @@ and expensive elsewhere:
 - **`ipam.mode: kubernetes` stays**, so Talos keeps allocating node pod CIDRs and
   **the pod network does not renumber.** This is not a re-addressing exercise.
 
-`autoDirectNodeRoutes: true` is valid because D20 puts every machine on one
+`autoDirectNodeRoutes: true` is valid because the fleet migration puts every machine on one
 bridged LAN (`target-architecture.md` §4). Nodes are L2-adjacent, so pod traffic
 routes directly with no overlay. On a topology where that stopped being true, the
 fallback is tunnel mode — a one-value change, not a redesign.

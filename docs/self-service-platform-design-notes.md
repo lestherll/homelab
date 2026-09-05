@@ -1,12 +1,13 @@
 # Self-service typed API: Application, Database, ObjectStorage — why it's shaped this way
 
-D15 (self-service typed platform API) and D16 (zero-touch app registration),
-recorded in `CONCEPT.md`. Both are built and live. This page used to be the
-full design derivation and PR-by-PR build diary for getting there — research
-notes, a spike, corrections found along the way, verification checklists.
-That process is finished; what's kept here is the architectural rationale
-that still explains the current shape. For the current field reference, see
-`docs/platform-api-usage.md`; for D16 (how an app registers itself), see
+The self-service typed platform API and zero-touch app registration — both
+built and live (the numbered decision log that used to record them as D15
+and D16 is now git history). This page used to be the full design derivation
+and PR-by-PR build diary for getting there — research notes, a spike,
+corrections found along the way, verification checklists. That process is
+finished; what's kept here is the architectural rationale that still
+explains the current shape. For the current field reference, see
+`docs/platform-api-usage.md`; for zero-touch app registration (how an app registers itself), see
 `docs/zero-touch-app-registration.md`; for the RBAC grant that must extend
 whenever a kind is added, see `infrastructure/platform-api/rbac-kro-aggregate.yaml`.
 Build-time gotchas worth remembering live in the journal:

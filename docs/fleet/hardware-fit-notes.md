@@ -39,7 +39,7 @@ records them. The model names are the operator's, and they are consistent with
 everything measured: a `ST1000LM035` is a 2.5" laptop drive, which is why
 machine 1's "bulk" tier is 5400rpm in the first place.
 
-**There is no machine 3.** D20 needs three for etcd quorum.
+**There is no machine 3.** The fleet migration needs three for etcd quorum.
 
 ## 2. AMT: closed, negative
 
@@ -103,8 +103,9 @@ Two consequences worth carrying into the design rather than discovering later:
 - **An orderly shutdown becomes possible.** Machine 1 can, in principle, notice
   mains loss and act on it. Talos has no `upsd`, so this is not free, but it is
   the difference between an etcd snapshot on the way down and a hard stop.
-- **It argues against treating machine 1 as interchangeable cattle.** D20's
-  invariant is that machines are cattle; this machine is measurably not — most
+- **It argues against treating machine 1 as interchangeable cattle.** The
+  fleet migration's invariant is that machines are cattle; this machine is
+  measurably not — most
   RAM, only HDD, only battery. See §6.
 
 ## 4. The capacity budget is wrong, and by a lot
@@ -126,8 +127,9 @@ Verified. It does not hold.
 The budget concluded *"~16Gi of 45Gi"* for the platform and *"~25Gi left for
 applications"*. Against 18.2Gi there is no such headroom.
 
-**And the per-machine floor is the harder number.** D20 makes every machine a
-control plane *and* a Longhorn node. Taking §10's own per-machine figures and
+**And the per-machine floor is the harder number.** The fleet migration makes
+every machine a control plane *and* a Longhorn node. Taking §10's own
+per-machine figures and
 dividing by three:
 
 | Per-machine daemon | ~RAM |
@@ -139,12 +141,12 @@ dividing by three:
 | **Floor, before any workload** | **~2.9Gi** |
 
 **Machine 2 has 3.2Gi.** It would spend ~90% of its memory being a member of the
-cluster, leaving ~0.3Gi to do anything. It cannot be a D20 node as designed. This
+cluster, leaving ~0.3Gi to do anything. It cannot be a fleet-migration node as designed. This
 is the concrete version of what `multi-node-ha-design-notes.md` §3.1 already
 called *"marginal for a control-plane node"* and what `headless-talos-install.md`
 §4 repeats — both were right, and neither had the arithmetic.
 
-**The fix is cheap and is the highest-leverage purchase in the whole D20 plan.**
+**The fix is cheap and is the highest-leverage purchase in the whole fleet-migration plan.**
 The M710e takes 2 × DDR4 non-ECC UDIMMs to **32GB**. Going to 16GB or 32GB costs
 less than a single smart plug per machine and moves machine 2 from "cannot
 participate" to "comfortable". Nothing else on any list in this repo buys as much.
@@ -171,7 +173,7 @@ throughput, and a replicated volume runs at the pace of the slowest replica it
 must acknowledge. §10's warning that *"Longhorn replica placement wants comparable
 disk sizes"* understates it — comparable *speed* matters at least as much here.
 
-## 6. The fleet is heterogeneous, and D20 assumes it is not
+## 6. The fleet is heterogeneous, and the fleet migration assumes it is not
 
 Every design document on this branch is written for interchangeable machines:
 `allowSchedulingOnControlPlanes: true` on all three, identical roles, topology
@@ -187,7 +189,7 @@ justification. The measured fleet is not that:
 | Form factor | laptop | SFF desktop |
 
 The two machines are close to opposites on every row that matters. Nothing in
-D20 currently expresses that, and the honest reading is that **machine 1 is the
+the fleet migration currently expresses that, and the honest reading is that **machine 1 is the
 outlier and machine 2 is the template**. A third machine should therefore look
 like the ThinkCentre, not like the laptop: SFF desktops are the sane cattle unit,
 they take a smart plug, they have drive bays, and a matched pair plus a third
@@ -203,7 +205,7 @@ same plan, which is a good sign it is the right one.**
 ## 7. What to buy, cheapest first
 
 1. **RAM for machine 2** — 2 × DDR4-2400 non-ECC UDIMM, to 16GB or 32GB. The
-   single highest-leverage item in D20 (§4). Do this before anything else.
+   single highest-leverage item in the fleet migration (§4). Do this before anything else.
 2. **A 3.5" HDD for machine 2**, if `bulk` is to be replicated at all (§5). The
    bay is free.
 3. **A smart plug for machine 2 only**, if remote power is wanted later. It does

@@ -89,8 +89,8 @@ Two findings worth recording separately:
 | Class | Backing | Reclaim | For |
 |---|---|---|---|
 | `local-path` (default) | SSD | Delete | regenerable/disposable state |
-| `local-path-retain` | SSD | Retain | D4-durable state that is latency-bound |
-| `local-path-bulk` | **HDD** `/mnt/storage/k8s-volumes` | Retain | D4-durable state that is large and sequential |
+| `local-path-retain` | SSD | Retain | durable state (per the durability-classification rule) that is latency-bound |
+| `local-path-bulk` | **HDD** `/mnt/storage/k8s-volumes` | Retain | durable state (per the durability-classification rule) that is large and sequential |
 
 Placement rules, in the order they actually get argued about:
 

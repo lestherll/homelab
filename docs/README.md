@@ -17,15 +17,15 @@ operating reference for a specific area.
 - [`platform-api-usage.md`](platform-api-usage.md) — field reference for
   onboarding or migrating an app onto `Database`/`ObjectStorage`/`Application`.
 - [`self-service-platform-design-notes.md`](self-service-platform-design-notes.md) —
-  why the platform API (D15) is shaped the way it is: kro, the resource-API/
+  why the self-service platform API is shaped the way it is: kro, the resource-API/
   attachment-API split, the one-way-door choices.
 - [`zero-touch-app-registration.md`](zero-touch-app-registration.md) — how an
-  app repo registers itself with the platform (D16): the identity chain, the
+  app repo registers itself with the platform: the identity chain, the
   workflow an app adds, the isolation test matrix.
 - [`identity-headers.md`](identity-headers.md) — the app-side contract for
   Tailscale's `Tailscale-User-*` headers, and when they're absent.
 - [`gitops-onboarding-learnings.md`](gitops-onboarding-learnings.md) — what
-  hand-built app/data-service instances taught before D15; superseded for
+  hand-built app/data-service instances taught before the self-service platform API; superseded for
   `Database`/`ObjectStorage`/`Application` themselves, still relevant for
   anything not yet on the typed API.
 - [`message-broker-design-notes.md`](message-broker-design-notes.md) —
@@ -72,7 +72,7 @@ operating reference for a specific area.
   reaches a node from off the LAN via the node's own Tailscale system
   extension. Built and verified.
 
-## Fleet — D20 (multi-node bare-metal fleet)
+## Fleet — the bare-metal fleet migration (multi-node)
 
 The ADR is **accepted, build in progress**: `clusters/homelab-metal/`,
 `terraform/modules/talos-metal/` and `infrastructure/longhorn/` are real,
@@ -86,10 +86,10 @@ built" can be trusted on sight again below:
   three-layer (Platform API / Infrastructure / Fleet) model the rest of this
   group is written against. Standing description, current.
 - [`fleet/target-architecture.md`](fleet/target-architecture.md) — the
-  detailed build-out of the Fleet and Infrastructure layers under D20.
+  detailed build-out of the Fleet and Infrastructure layers under the fleet migration.
   Partially built: several N=1 pieces landed, the N=3/HA shape is still ahead.
-- [`fleet/platform-api-under-d20.md`](fleet/platform-api-under-d20.md) — what
-  D20 costs the Platform API layer. The three Longhorn-cutover breakages it
+- [`fleet/platform-api-migration-impact.md`](fleet/platform-api-migration-impact.md) — what
+  the fleet migration costs the Platform API layer. The three Longhorn-cutover breakages it
   found are resolved; the N=3/multi-cluster prep items are still ahead.
 - [`fleet/hardware-fit-notes.md`](fleet/hardware-fit-notes.md) — the actual
   measured hardware (two mismatched machines, no BMC) versus what the design
@@ -111,7 +111,7 @@ built" can be trusted on sight again below:
   whether a smart plug can drive Tinkerbell's BMC layer directly. Still open,
   per the ADR's "remote power" row.
 - [`fleet/cilium-only-networking.md`](fleet/cilium-only-networking.md) —
-  whether Cilium alone (no Flannel chaining) works under D20's bridged
+  whether Cilium alone (no Flannel chaining) works under the fleet migration's bridged
   networking. **Adopted, built** — live on `clusters/homelab-metal/`.
 - [`fleet/provisioning-automation-without-netboot.md`](fleet/provisioning-automation-without-netboot.md) —
   what's left to automate given manual install and NFD, and whether it's

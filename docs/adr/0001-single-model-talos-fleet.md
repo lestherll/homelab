@@ -1,4 +1,4 @@
-# D20: Single-model fleet, Talos on the metal
+# Single-model fleet, Talos on the metal
 
 **Status: ACCEPTED, build in progress (2026-09-04).** Machine 2
 (`homelab-worker-0`) is live on bare-metal Talos — `clusters/homelab-metal/`,
@@ -12,8 +12,8 @@ log, with long-form rationale in a `docs/*-design-notes.md` beside them (D18 →
 `talos-terraform-migration-notes.md`, D15 → `self-service-platform-design-notes.md`)
 — that decision log has since moved to git history; `CONCEPT.md` is now a
 short concept pitch, with no numbered log for a new decision to be promoted
-into. So the promotion this file originally described (become D20 in
-`CONCEPT.md`, its body become `single-model-fleet-design-notes.md`, this file
+into. So the promotion this file originally described (become a numbered
+decision in `CONCEPT.md`, its body become `single-model-fleet-design-notes.md`, this file
 deleted) no longer has a destination. **This ADR is now the permanent record**
 — its own Status line above is what tracks acceptance and progress, the same
 way every ADR after it will.
@@ -41,7 +41,7 @@ TODAY
 plane. Virtualisation moves from *under* the cluster to *inside* it.
 
 ```
-D20
+AFTER
 
                      ┌──────────────────┐
     you ────────────▶│  Kubernetes API  │   the only endpoint
@@ -66,11 +66,11 @@ The same change in layering notation is in the Decision section below.
   FLEET            machines · power · boot · OS · config
 ```
 
-**D20 is a Fleet and Infrastructure decision.** Its whole justification is that
+**This is a Fleet and Infrastructure decision.** Its whole justification is that
 the Platform API — the layer the project exists to produce — barely notices. That
-is the test §10 applies. D18 passed the same test for a change one layer
-higher (k3s → Talos, entirely inside Infrastructure); D20 is the deeper case. Do not
-confuse these with D1's "Layer 0/1/2", which is the *thickness* of the Platform
+is the test §10 applies. The Talos VM cutover passed the same test for a change one layer
+higher (k3s → Talos, entirely inside Infrastructure); this is the deeper case. Do not
+confuse these with the layer-promotion rule's "Layer 0/1/2", which is the *thickness* of the Platform
 API layer and sits inside the top box.
 
 **The plan.**
@@ -130,14 +130,14 @@ does not change. Not one file. See §10.
 
 ---
 
-## D20 — Single-model fleet: Talos on the metal, virtualisation above the cluster
+## Decision — Single-model fleet: Talos on the metal, virtualisation above the cluster
 
 **Decision.** Every machine in the fleet runs Talos on bare metal. Kubernetes
 becomes the fleet's single control plane. Anything needing a full mutable OS
 runs as a KubeVirt VM *inside* the cluster rather than as a hypervisor *beneath*
 it. Ansible retires from cluster infrastructure entirely.
 
-The layering, in D18's own notation — before:
+The layering, in the Talos VM cutover's own notation — before:
 
 ```
 Ansible   → configure a mutable physical machine
@@ -172,15 +172,17 @@ not**:
                   Terraform per libvirtd      against ONE endpoint
 ```
 
-**This is not a reversal of D18 — it is D18's recorded reversal trigger firing.**
-D18 says: *"Reverses if: a second machine arrives and the hypervisor/cluster split
-stops paying for itself relative to just running Talos on bare metal again —
-recorded as Alternative A in `docs/talos-terraform-migration-notes.md` and never
-eliminated, only deprioritised."* Machine 2 is arriving. This decision is the
-scheduled re-pricing, and it concludes that Alternative A now wins.
+**This is not a reversal of the Talos VM cutover — it is that decision's
+recorded reversal trigger firing.** It says: *"Reverses if: a second machine
+arrives and the hypervisor/cluster split stops paying for itself relative to
+just running Talos on bare metal again — recorded as Alternative A in
+`docs/talos-terraform-migration-notes.md` and never eliminated, only
+deprioritised."* Machine 2 is arriving. This decision is the scheduled
+re-pricing, and it concludes that Alternative A now wins.
 
-D3's trigger fires at the same time: *"Reverses if: a second machine arrives and
-a dedicated non-production cluster becomes affordable."*
+The single-node design's trigger fires at the same time: *"Reverses if: a
+second machine arrives and a dedicated non-production cluster becomes
+affordable."*
 
 ---
 
@@ -353,7 +355,7 @@ Full reasoning, the Talos extensions it drags into §4.1, and what it means for
 
 ## 6. Multi-cluster: four things, all cheap at N=1
 
-More clusters are expected (D3's trigger, §0). An audit of what actually breaks
+More clusters are expected (the single-node design's trigger, §0). An audit of what actually breaks
 found the skeleton already correct — `clusters/homelab/` is Flux's standard
 layout, `terraform/clusters/homelab/` mirrors it, the module is already
 parameterised (`variables.tf` says *"so homelab and homelab-nonprod can sit on
@@ -795,8 +797,8 @@ Not one file."* False — six files change, one of them the public API. The clai
 that survives is narrower and still the strong one: **the API's spec surface is
 nearly untouched; its implementation is not.** An app author sees one visible
 change and one semantic one; the cost lands on the platform owner, which is where
-an abstraction is supposed to put it. Detail, and the three breakages to remember,
-in `docs/fleet/platform-api-under-d20.md` (parked — not scheduled).
+an abstraction is supposed to put it. Detail, and the three breakages to remember
+— all now resolved — in `docs/fleet/platform-api-migration-impact.md`.
 
 What genuinely does not move: the three tier names, because `scratch`/`fast`/
 `bulk` describe guarantees rather than implementations. Nor the `Bucket`/
@@ -807,17 +809,18 @@ paths — `talos.tf`'s own comment notes a real disk serial works exactly as a
 virtio one does. Flux does not know it is running on a VM today and would not
 notice it had stopped.
 
-D18 made the same argument about the k3s→Talos cutover being invisible to app
-authors, and called that *"the strongest available evidence the self-service
-abstraction (D15) was drawn in the right place."* The same test passes again
+The Talos VM cutover made the same argument about the k3s→Talos cutover being
+invisible to app authors, and called that *"the strongest available evidence
+the self-service abstraction (the self-service platform API) was drawn in the
+right place."* The same test passes again
 here, one layer deeper — with the correction above, which is that it passes on
 the *contract*, not on the file count.
 
 **This section has now made the same argument twice without naming what it is
 arguing about, so:** it is the **layer-boundary test** from
 `docs/fleet/golden-architecture.md`. A change at one layer is sound if the layer
-above it does not have to change. D18 passed it for Infrastructure → Platform
-API; D20 passes it again for Fleet → Infrastructure → Platform API.
+above it does not have to change. The Talos VM cutover passed it for Infrastructure → Platform
+API; this decision passes it again for Fleet → Infrastructure → Platform API.
 
 **And it has since passed a third time, more cleanly than either.** The four
 Fleet-layer investigations of 2026-08-31 — Metal3, Tinkerbell, Tinkerbell +

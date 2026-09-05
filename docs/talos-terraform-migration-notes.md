@@ -81,8 +81,8 @@ The Talos PKI is generated out of band (`talosctl gen secrets`) and
 SOPS-encrypted rather than produced by a `talos_machine_secrets` resource.
 Terraform has no state encryption at any version, so if Terraform generated
 the PKI, `terraform.tfstate` would be the only copy of the cluster's root CA
-— a second root secret sitting beside the age key, which D12 says should not
-exist. Generating it out of band and feeding it through the provider's
+— a second root secret sitting beside the age key, which the single-root-key
+rule says should not exist. Generating it out of band and feeding it through the provider's
 ephemeral resources and write-only arguments means state holds no
 authoritative key material; a real `terraform plan` prints them as
 `(write-only attribute)`. Full detail in `terraform/README.md`.
@@ -111,7 +111,7 @@ are historical rather than planned: the cutover runbook's dump/restore steps
 carrying) and its framing of verified dumps as the safety net (the fallback
 that was actually used is `systemctl start k3s`, described above). Read them
 as a record of the bare-metal plan, not as instructions — except insofar as
-D20 revives it.
+the fleet migration revives it.
 
 ## What moves where (Ansible → Talos/Terraform mapping)
 
@@ -125,7 +125,7 @@ D20 revives it.
 | `cli_tools` (age, flux, sops, helm, kubectl-cnpg, awscli on the host) | Whole role vanishes — Talos has no shell or package manager. Re-home to the operator workstation (mise/nix, or a slimmed Ansible kept *only* for workstation tooling), plus `talosctl`. |
 | `heartbeat_watchdog` (systemd timer + curl + ntfy, on-host by design) | Not expressible on Talos (no file writes, no user systemd). Replacement: in-cluster CronJob that curls `alertmanager.tailf4742d.ts.net/-/healthy` and pings an external dead-man's switch (healthchecks.io-style) only on success; the external service pages ntfy when pings stop. Ping URL in SOPS. |
 | Host tailscaled (preinstalled, untouched by Ansible, but load-bearing: tls-san, API-over-tailnet, watchdog's MagicDNS) | Siderolabs Tailscale **system extension** via Image Factory schematic; auth key as a TF-managed secret. In-cluster tailscale-operator is untouched. |
-| Flux bootstrap (one-off CLI, committed gotk manifests) | `flux_bootstrap_git` in Terraform + pre-seeding the `sops-age` Secret, keeping "one bootstrap process, one key". The deploy key is read via a SOPS TF data source, so the chain still terminates at the one age key (D12). |
+| Flux bootstrap (one-off CLI, committed gotk manifests) | `flux_bootstrap_git` in Terraform + pre-seeding the `sops-age` Secret, keeping "one bootstrap process, one key". The deploy key is read via a SOPS TF data source, so the chain still terminates at the one age key (the single-root-key rule). |
 | ansible.cfg / become / sudo-rs workaround | Vanishes with Ansible-on-host entirely. |
 
 ## Forced changes in `infrastructure/`
@@ -171,7 +171,7 @@ D20 revives it.
    moves into a container. This is the API's first breaking change.
 7. **RAPL DaemonSet** (item 3 in the mapping table above).
 8. **GitHub-OIDC apiserver args** re-express as `cluster.apiServer.extraArgs`
-   when D16 is built.
+   when zero-touch app registration is built.
 
 ## Terraform shape
 
@@ -188,7 +188,7 @@ When machine #2 arrives: fill in `clusters/homelab-nonprod/`, one
 `allowSchedulingOnControlPlanes: true` (single-CP clusters). tfstate contains
 the Talos PKI and the git deploy key → local state with an encrypted backup
 stored alongside the age key; record it as a second root secret next to
-D12's one.
+the single-root-key rule's one.
 
 ## Honest cost sheet
 

@@ -3,7 +3,7 @@
 # service class the way it would on a managed cloud, without knowing what backs
 # it.
 #
-# THAT NAMING IS WHY D20 COST THE PLATFORM API ALMOST NOTHING. The
+# THAT NAMING IS WHY THE FLEET MIGRATION COST THE PLATFORM API ALMOST NOTHING. The
 # implementation underneath `fast` and `bulk` changed completely — local-path
 # directories on per-tier virtual disks became Longhorn volumes selected by disk
 # tag — and the class names, and therefore every PVC and every RGD that names
@@ -22,7 +22,7 @@
 
 # --- scratch -----------------------------------------------------------------
 # Disposable, on the system disk, deleted with its claim. Still local-path, and
-# deliberately NOT Longhorn: platform-api-under-d20.md §3's "do not replicate
+# deliberately NOT Longhorn: platform-api-migration-impact.md §3's "do not replicate
 # twice" — there is nothing here worth replicating, and a replicated disposable
 # volume is pure cost.
 #
@@ -38,8 +38,9 @@ reclaimPolicy: Delete
 volumeBindingMode: WaitForFirstConsumer
 ---
 # --- fast --------------------------------------------------------------------
-# Durable, low-latency, small. The default choice for anything D4 classifies as
-# Durable that is not bulk sequential data: Postgres PGDATA, the SeaweedFS filer
+# Durable, low-latency, small. The default choice for anything the
+# durability-classification rule classifies as Durable that is not bulk
+# sequential data: Postgres PGDATA, the SeaweedFS filer
 # index, the Prometheus TSDB.
 #
 # Selected by DISK TAG, never by node or path. That is what makes the class a

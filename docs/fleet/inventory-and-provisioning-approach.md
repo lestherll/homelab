@@ -9,9 +9,9 @@ fleet is two mismatched machines with no BMC and no path to one
 
 **The recommendation in one line: deploy Node Feature Discovery now to get real,
 reconciled inventory of cluster members; keep a small hand-written node list in
-git for machines that aren't members yet; and leave provisioning where D20
-already puts it — Terraform's `siderolabs/talos` provider — until netboot is
-worth building.**
+git for machines that aren't members yet; and leave provisioning where the
+fleet migration already puts it — Terraform's `siderolabs/talos` provider —
+until netboot is worth building.**
 
 > **The hand-written-list half is built, as `fleet/nodes.yaml`** — every
 > hardware fact (role, zone, MAC, address, disk selector, Longhorn disk
@@ -55,7 +55,7 @@ and writes `NodeFeature` custom resources; `nfd-master` watches those and labels
 the `Node`. Refreshed on an interval (~60s default), so it is *reconciled*, not a
 one-off scrape.
 
-**This is the piece that has been missing, and it needs nothing from D20.** It is
+**This is the piece that has been missing, and it needs nothing from the fleet migration.** It is
 a HelmRelease in `infrastructure/`, exactly like `metrics-server/` — no new
 control plane, no bootstrap circularity, no netboot, and it works on the
 single-node cluster that exists today.
@@ -141,7 +141,7 @@ render machine configs. Per machine: hostname, MAC, LAN address, role
 
 Two reasons to write it as a *data file* rather than as Terraform resource blocks:
 
-1. It is the thing D20 §7 already needs — *"Terraform keeps the `siderolabs/talos`
+1. It is the thing the fleet migration's ADR §7 already needs — *"Terraform keeps the `siderolabs/talos`
    provider only… It owns machine configs, PKI generation and bootstrap"* — and
    `fleet-provisioning-design-notes.md` §8 already reaches for a "node list".
    Making it data rather than HCL is what lets the same file feed something else

@@ -91,7 +91,7 @@ under `infrastructure/<component>/helmrelease.yaml`. Follow this repo's
 existing convention: leave a dated comment explaining *why* the number
 changed (what was observed, not just the new value — see the existing Grafana
 OOM comment in `infrastructure/observability/helmrelease.yaml` for the style
-to match). Re-check the D7 budget sum from step 1 after the change.
+to match). Re-check the observability budget sum from step 1 after the change.
 
 Land it the normal way for this repo: branch → commit → `gh pr create` →
 user merges. Never edit and leave live-applied via `kubectl edit`/`kubectl

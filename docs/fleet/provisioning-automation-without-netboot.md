@@ -37,8 +37,8 @@ today:
 | 9 | replicas begin scheduling | Kubernetes | automatic |
 
 Steps 4 and 5 already exist: `terraform/modules/talos-cluster/talos.tf` carries
-`talos_machine_configuration_apply` and `talos_machine_bootstrap`. Under D20 the
-libvirt half of that module (`domain.tf`, `volumes.tf`) retires and **this half is
+`talos_machine_configuration_apply` and `talos_machine_bootstrap`. Under the
+fleet migration the libvirt half of that module (`domain.tf`, `volumes.tf`) retires and **this half is
 exactly what is kept** — ADR §7's *"Terraform keeps the `siderolabs/talos`
 provider only… it owns machine configs, PKI generation and bootstrap."*
 
@@ -53,8 +53,8 @@ HDD, silently."*
 
 Every one of these is a machine-config operation, not a reinstall: adding a
 `certSAN`, adding a system extension, changing a disk selector, changing kernel
-args, promoting a worker, upgrading Talos, upgrading Kubernetes. Under D20 they
-are also how the **one rebuild** in §4.1 is executed and, later, how it is
+args, promoting a worker, upgrading Talos, upgrading Kubernetes. Under the
+fleet migration they are also how the **one rebuild** in §4.1 is executed and, later, how it is
 avoided.
 
 Automating step 2 automates the **rare** thing. Automating steps 4–5 and 7–8
@@ -122,7 +122,7 @@ is built from a schematic — `ghcr.io/siderolabs/imager` locally, per
 `talos-without-omni.md` — so the extension set is a file in git and the artifact
 is reproducible.
 
-This is not optional under D20 regardless: §4.1 requires the Longhorn extensions
+This is not optional under the fleet migration regardless: §4.1 requires the Longhorn extensions
 (`siderolabs/iscsi-tools`, `siderolabs/util-linux-tools`) and the Tailscale
 extension baked into the installed image. **A hand-downloaded ISO from the
 factory would silently miss them**, and that costs the one rebuild twice.
@@ -165,8 +165,8 @@ other direction.
 ## 6. Limits worth stating
 
 - **Terraform is push-reconciled, not continuously reconciled.** Nothing watches
-  machine config and corrects drift — that is what Omni sells, and D20 declined
-  it. `terraform apply` is the reconcile, and it is deliberate
+  machine config and corrects drift — that is what Omni sells, and the fleet
+  migration declined it. `terraform apply` is the reconcile, and it is deliberate
   (`inventory-and-provisioning-approach.md` §3 makes the same point about
   `tailscale-acl/`).
 - **NFD only sees machines that have joined.** Steps 7–8 are automatable; steps

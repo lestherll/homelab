@@ -72,7 +72,7 @@ spec:
   # PVC-backed, on the bulk tier: volume data is the platform's own
   # analogue of a Postgres PGDATA volume — losing it loses every object in
   # every bucket. Labelled durable for the same reason CNPG's storage is
-  # (D4), so unlabelled-volume alerting (once built) doesn't miss it.
+  # (the durability-classification rule), so unlabelled-volume alerting (once built) doesn't miss it.
   #
   # Bulk tier (the 931G spinning disk) rather than the SSD: object storage is
   # the one component here designed to grow without bound, and its access
