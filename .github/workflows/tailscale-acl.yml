@@ -25,6 +25,21 @@ on:
       - tailscale-acl/policy.hujson
       - .github/workflows/tailscale-acl.yml
 
+  # Re-apply the policy without changing it. Everything else here is
+  # path-triggered, so an apply that does not stick leaves no way to retry
+  # short of an empty commit — and there is no signal when one does not
+  # stick: gitops-pusher prints its control/local/cache hashes and the step
+  # still succeeds, so a control plane that stayed behind git looks exactly
+  # like one that caught up.
+  #
+  # That is not hypothetical. The apiserver ProxyGroup rename reached this
+  # file but not the tailnet, and the live tag:ci grant went on naming a
+  # service no proxy advertises. App registration broke and stayed broken,
+  # because the one identity that would have noticed — the operator's own
+  # device — reaches the apiserver through the autogroup:member grant on
+  # tag:k8s instead, and never touches the service grant at all.
+  workflow_dispatch:
+
 # Never let two applies race the control plane; a queued run re-reads the file
 # from its own commit anyway, so cancelling in-progress would only lose work.
 concurrency:
