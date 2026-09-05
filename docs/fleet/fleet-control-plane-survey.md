@@ -1,7 +1,7 @@
 # How other people build a unified API over machines they own
 
 **Status: survey, not a decision.** Written 2026-08-30 to pressure-test
-`docs/adr/0001-single-model-talos-fleet.md` (draft D20) against prior art, after
+`docs/adr/0001-single-model-talos-fleet.md` (then a draft of the fleet migration) against prior art, after
 §8's open questions were closed. Nothing here is built and nothing depends on it.
 Where it disagrees with the draft it says so; the two places it does are §5
 (Incus, an alternative §7 omits) and §3 (a bootstrap answer §7 assumes doesn't
@@ -192,14 +192,14 @@ question had to be settled first.
 
 ## 5. The near-misses: systems that look like the answer
 
-### Harvester — D20's target shape, already shipped
+### Harvester — the fleet migration's target shape, already shipped
 
 Harvester is an immutable OS, plus Kubernetes, plus KubeVirt for VMs, plus
 Longhorn for distributed block storage, plus Prometheus and Grafana, presenting
 *"Kubernetes API as a unified automation language across container and VM
 workloads."*
 
-That is D20's "after" diagram with a vendor's name on it. Read the draft's §3,
+That is the fleet migration's "after" diagram with a vendor's name on it. Read the draft's §3,
 §5, §8.1 and §9 next to that sentence: same control plane, same VM escape hatch,
 same storage engine, same observability, same claim.
 
@@ -213,13 +213,13 @@ same storage engine, same observability, same claim.
   The `bulk` tier is a 5400rpm spinning disk — short by roughly two orders of
   magnitude.
 
-**But the useful conclusion is not "rejected".** It is that D20's component
-choices are the same choices a vendor made independently against the same
+**But the useful conclusion is not "rejected".** It is that the fleet
+migration's component choices are the same choices a vendor made independently against the same
 problem — and §8.1 arrived at Longhorn on completely unrelated grounds
 (Ceph cannot consume a formatted path) only to land on Harvester's pick.
 Assembling this by hand is therefore not reinvention; it is the only way to get
 that architecture onto 15Gi. **Re-check Harvester at hardware-refresh time**, not
-at N=3: it collapses D20's build into an install, and the trigger is RAM, not
+at N=3: it collapses the fleet migration's build into an install, and the trigger is RAM, not
 machine count.
 
 ### Proxmox — unifies access, not placement
@@ -251,19 +251,19 @@ blocks, no `qemu+ssh://` fan-out or `?sshauth=agent` trap, and
 
 The honest comparison is short:
 
-- **What Incus gives that D20 doesn't.** A far smaller change. A mutable-OS path
+- **What Incus gives that the fleet migration doesn't.** A far smaller change. A mutable-OS path
   that doesn't cost KubeVirt (§9's second bullet). No §4.1 rebuild. And it runs
   on 15Gi, which Harvester does not.
-- **What D20 gives that Incus doesn't.** *One* control plane rather than two.
+- **What the fleet migration gives that Incus doesn't.** *One* control plane rather than two.
   Incus fixes the hypervisor layer and leaves an Ansible-built base OS underneath
   it, so §3's retirement never happens and the two-model fleet invariant survives
   rather than becoming unnecessary. Flux still cannot see a machine.
-- **So the question D20 is really deciding is not "how do I get one endpoint".**
+- **So the question the fleet migration is really deciding is not "how do I get one endpoint".**
   Incus answers that for less. It is *"do I want machines to be Kubernetes
   objects"* — and the case for yes is §10's: `infrastructure/` doesn't change, so
   the bet is contained.
 
-I would still take D20. But §7 should reject Incus explicitly, because a rejected
+I would still take the fleet migration. But §7 should reject Incus explicitly, because a rejected
 alternative that is **cheaper and sufficient for the stated symptom** is the
 strongest available test of a decision, and leaving it unmentioned makes §1 read
 as an argument for Kubernetes when it is actually an argument against libvirt.
@@ -284,7 +284,7 @@ Plane 4 is the column that matters; plane 1 is the column that costs money.
 | Incus | no | yes | yes | **yes** | **yes** | no | yes |
 | Proxmox | no | yes | yes | **no** | access only | no | yes |
 | **This repo today** | no | partial | yes | pods only | yes (apiserver) | no | yes |
-| **D20 as drafted** | no | yes | yes | yes | yes | no | yes |
+| **The fleet migration, as drafted** | no | yes | yes | yes | yes | no | yes |
 
 ## 7. What I would actually do, cheapest first
 
@@ -307,7 +307,7 @@ Plane 4 is the column that matters; plane 1 is the column that costs money.
    > above was closer to right than that correction made it sound**, for every
    > machine that is not a laptop.
 2. **Leave plane 5 where it already is.** The apiserver is the one endpoint. That
-   is D20's actual claim and the survey supports it.
+   is the fleet migration's actual claim and the survey supports it.
 3. **Netboot: start with the schematic and iPXE** (§8.4). Reach for Tinkerbell
    only when "reinstall a machine I can't reach" becomes recurring — it is CRDs,
    so it joins Flux rather than displacing it.
@@ -320,7 +320,7 @@ Plane 4 is the column that matters; plane 1 is the column that costs money.
    > Rufio supports natively and nothing here had considered.
 4. **Don't build plane 4 for machines.** At N=3, the pod scheduler already is
    plane 4 for everything including KubeVirt VMs, which are scheduled by the same
-   scheduler. This is the part D20 gets for free and that Proxmox, Incus and MAAS
+   scheduler. This is the part the fleet migration gets for free and that Proxmox, Incus and MAAS
    each charge for separately.
 5. **Revisit Harvester and Omni on the same trigger**, and make the trigger a
    hardware refresh rather than a machine count — Harvester's blocker is RAM and

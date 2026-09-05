@@ -1,6 +1,6 @@
 # GitOps app-onboarding: learnings from hand-built instances
 
-Per `CONCEPT.md`'s D1 promotion rule, a resource type earns a Layer 1
+Per this platform's promotion rule, a resource type earns a Layer 1
 template (or Layer 2 typed API) only after the third instance has been
 built by hand — designing the abstraction before real instances exist is
 the standard way platform APIs end up leaky. This doc tracks what each
@@ -51,8 +51,9 @@ Identical every time, and so exactly what a template should absorb:
   per new app repo.
 - **No rollback story yet.** This instance uses `:latest` +
   `imagePullPolicy: Always`, which is fine for a disposable test server
-  but isn't the platform's actual intended answer — that's D2 (registry-
-  watching reconciler + tag-bump commits), which isn't built yet.
+  but isn't the platform's actual intended answer — that's the
+  image-automation gap (a registry-watching reconciler + tag-bump commits),
+  which isn't built yet.
 
 **Instance #2: `personal-finance-dashboard`**
 (github.com/lestherll/personal-finance-dashboard) — a `uv`-based Streamlit
@@ -87,8 +88,9 @@ with actual persistence requirements.
   exposed the first real "what if the host dies" gap for actual
   irreplaceable data (unlike Grafana/Prometheus state, which is
   reproducible from git + re-scraping). Decided *not* to bolt on a
-  per-app backup script for this one hostPath — the intended fix is C6's
-  object-storage service (see Next steps below), so this app's data stays
+  per-app backup script for this one hostPath — the intended fix is the
+  zero-touch-credentials pattern's object-storage service (see Next steps
+  below), so this app's data stays
   on hostPath until that lands, then migrates. Recorded here so this
   doesn't quietly get treated as "resolved" — it isn't yet.
 - **Pod `securityContext` (`runAsUser`/`runAsGroup`/`fsGroup`)`.** Needed
@@ -104,7 +106,7 @@ with actual persistence requirements.
 
 ## Database track — Instance #1: `fastapi-echo` + Postgres
 
-D1's promotion rule tracks `Application` and `Database` as **separate**
+The layer-promotion rule tracks `Application` and `Database` as **separate**
 counters (both are named Layer-2 types). This is the first instance
 toward `Database`'s count, and deliberately reused `fastapi-echo` rather
 than a new app repo — the point was to isolate "does self-hosted
@@ -117,29 +119,30 @@ re-test app-onboarding mechanics already proven twice.
   co-located with its `Deployment`/`Service`. This avoided the
   cross-repo secret-name coordination problem a homelab-repo-owned
   `Cluster` would have created.
-- **C6's "credentials delivered automatically" actually works, not just
-  in principle.** CloudNativePG auto-generates a Secret
-  (`<cluster-name>-app`, containing a `uri` key among others) the moment
-  the `Cluster` is created — nothing hand-created, nothing SOPS-encrypted
-  for this at all. This is D12's "minted by the cluster" pattern working
-  as designed, confirmed by an actual instance instead of just being
-  named as the goal.
+- **The zero-touch-credentials pattern's "credentials delivered
+  automatically" actually works, not just in principle.** CloudNativePG
+  auto-generates a Secret (`<cluster-name>-app`, containing a `uri` key
+  among others) the moment the `Cluster` is created — nothing hand-created,
+  nothing SOPS-encrypted for this at all. This is the single-root-key
+  rule's "minted by the cluster" pattern working as designed, confirmed by
+  an actual instance instead of just being named as the goal.
 - **The `local-path-retain` StorageClass fix works as a bare second
   `StorageClass` object** — same `rancher.io/local-path` provisioner,
   just `reclaimPolicy: Retain` — no provisioner-side config needed.
   Confirmed live: the resulting PV shows `RECLAIMPOLICY=Retain`.
-- **D4 durability labels land on the PVC, not the PV.** `inheritedMetadata.labels`
-  on the `Cluster` CR propagates to the generated PVC correctly — the PV
-  itself stays unlabelled, which is normal Kubernetes dynamic-provisioning
-  behavior (PVs don't inherit PVC labels), not a CloudNativePG quirk.
-  Worth remembering for wherever D4's "unlabelled volume alerts"
-  enforcement eventually gets built: it needs to look at PVCs.
+- **The durability-classification rule's labels land on the PVC, not the
+  PV.** `inheritedMetadata.labels` on the `Cluster` CR propagates to the
+  generated PVC correctly — the PV itself stays unlabelled, which is normal
+  Kubernetes dynamic-provisioning behavior (PVs don't inherit PVC labels),
+  not a CloudNativePG quirk. Worth remembering for wherever that rule's
+  "unlabelled volume alerts" enforcement eventually gets built: it needs to
+  look at PVCs.
 - **The anticipated Cluster-init/pod-rollout race didn't actually bite
   this time** — the app pod came up `1/1 Running` with zero restarts, the
   database was ready before its first connection attempt. Worth recording
   as "didn't materialize," not "solved" — there's still no explicit
   ordering guarantee between the two, this was timing, not a fix.
-- **The known D2 gap bit exactly as documented.** After merging, the new
+- **The known image-automation gap bit exactly as documented.** After merging, the new
   `/echo-history` route 404'd until a manual `kubectl rollout restart` —
   confirms `:latest` + `imagePullPolicy: Always` really doesn't auto-roll
   on a new image push, consistent with instance #1's finding.
@@ -158,25 +161,25 @@ re-test app-onboarding mechanics already proven twice.
   `200`.
 - **`Application` track: 2/3.** One more hand-built app instance wanted
   before considering a Layer 1 template or typed `Application` API, per
-  D1.
+  the layer-promotion rule.
 - **`Database` track: 1/3.** Two more hand-built database-consuming
   instances wanted before considering a Layer 1 template or typed
-  `Database` API, per D1.
+  `Database` API, per the layer-promotion rule.
 
-## Superseded 2026-08-10: the D1 promotion rule was pivoted away from, not completed
+## Superseded 2026-08-10: the layer-promotion rule was pivoted away from, not completed
 
 Everything above this line is the evidence base as it stood before the
 pivot — kept intact rather than rewritten, because it's exactly the
 evidence the pivot decision rests on. What actually happened next was
 **not** "hand-build one more `Application` instance and two more `Database`
-instances until D1's counters hit 3/3." Instead: `Database` was promoted to
-a Layer-2 typed API (`platform.homelab/v1alpha1`, via kro) at 1/3, and
-`Application`/`ObjectStorage` followed the same jump rather than waiting for
-a third hand-built instance apiece. Recorded as **D15** (`CONCEPT.md` entry
-pending — see `docs/self-service-platform-design-notes.md` for the full
-argument).
+instances until the layer-promotion rule's counters hit 3/3." Instead:
+`Database` was promoted to a Layer-2 typed API (`platform.homelab/v1alpha1`,
+via kro) at 1/3, and `Application`/`ObjectStorage` followed the same jump
+rather than waiting for a third hand-built instance apiece. This became the
+self-service platform API — see `docs/self-service-platform-design-notes.md`
+for the full argument.
 
-**The substantive reason, not just impatience:** D1's leakiness risk comes
+**The substantive reason, not just impatience:** the layer-promotion rule's leakiness risk comes
 specifically from hand-committing bespoke YAML per instance and then
 migrating everyone off a guessed abstraction later. A kro
 `ResourceGraphDefinition` is declarative and cheap to revise in place — kro
@@ -192,7 +195,8 @@ mostly re-prove mechanics instance #1/#2 already established.
 **A pattern from instance #2 that transferred unchanged, not by luck:**
 `personal-finance-dashboard`'s two open items from this doc —
 "object storage next" and "app code isn't S3-native" — are exactly what
-D15/D16 built and exactly what's still deferred. The self-service
+the self-service platform API and zero-touch app registration built and
+exactly what's still deferred. The self-service
 `ObjectStorage`+`Application.objectStorage[]` attachment is live and proven
 (isolated identity, prefix-scoped credentials, a real write/read/delete
 probe at app startup). The app-code S3 migration (adapters that actually
@@ -202,8 +206,9 @@ its own merits first, matching this doc's own original "needs a real
 decision when the time comes, not a default" framing.
 
 **MinIO was reconsidered and dropped.** This doc's "Next steps" entry named
-"a single MinIO-or-equivalent HelmRelease." By the time D15 was built,
-MinIO Operator had been archived upstream (2026-03-20) — SeaweedFS
+"a single MinIO-or-equivalent HelmRelease." By the time the self-service
+platform API was built, MinIO Operator had been archived upstream
+(2026-03-20) — SeaweedFS
 (`seaweedfs-operator`) was chosen instead, actively maintained, with a full
 S3+IAM CRD set (`Bucket`/`S3Identity`/`S3Credentials`/`S3Policy`/
 `S3PolicyBinding`) that made the self-service attachment pattern possible
@@ -214,10 +219,10 @@ doc already named ("a single-node object store is still one disk on this
 one machine") is unchanged — SeaweedFS doesn't get around it either; real
 off-host resilience is still a distinct, unstarted follow-up.
 
-For the full D15 build record — what shipped, what's proven vs. only
+For the full self-service-platform-API build record — what shipped, what's proven vs. only
 informally exercised, and the sharp technical gotchas (kro CEL quirks,
 Flux's live-testing hazard, SeaweedFS capacity tuning, Streamlit's
 execution model) — see `docs/self-service-platform-design-notes.md`'s
 Implementation log, and the `~/.claude/projects/.../memory/
-project_d15_self_service_platform.md` session memory for the condensed
+project_self_service_platform.md` session memory for the condensed
 version.

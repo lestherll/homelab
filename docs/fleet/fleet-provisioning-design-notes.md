@@ -21,8 +21,8 @@ capability grouping and var relocation of [§3](#3-inventory-group-by-capability
 everything from M1.4 onward. Sections 4-9 remain design only.
 
 Deliberately **not** referenced from `CONCEPT.md`. It proposes changes to
-`ansible/` and `terraform/` but supersedes no decision; D18 in particular stands
-— see [§1.1](#11-what-was-decided-and-what-was-not).
+`ansible/` and `terraform/` but supersedes no decision; the Talos VM cutover
+in particular stands — see [§1.1](#11-what-was-decided-and-what-was-not).
 
 ---
 
@@ -53,7 +53,7 @@ grounds that are not technical:
   right, independent of the cluster.
 - Flexibility on the Ansible side is wanted, not minimised.
 
-So **D18 stands unchanged**: Ubuntu stays on machine 1's metal as a hypervisor.
+So **the Talos VM cutover stands unchanged**: Ubuntu stays on machine 1's metal as a hypervisor.
 Its "reverses if" clause — *a second machine arrives and the hypervisor/cluster
 split stops paying for itself* — was examined when the second machine arrived
 and **did not fire**.
@@ -611,7 +611,7 @@ ad hoc later:
 - A machine's Ansible group memberships describe **capabilities**, never
   identity. "Is this the box with the second disk" is a group; "is this
   `homelab-01`" is not.
-- No Kubernetes-shaped fact enters `ansible/`. This is D18's original point and
+- No Kubernetes-shaped fact enters `ansible/`. This is the Talos VM cutover's original point and
   it is unaffected by any of the above — Talos enforces it regardless of whether
   Talos is on metal or in a domain.
 
@@ -717,7 +717,7 @@ one.
   the cluster PKI. Note this is a preference, not a necessity — both machines'
   Ansible is equally affected by §2.1.
 
-  On the age key: D12 asks for *"an encrypted copy in two physically separate
+  On the age key: the single-root-key rule asks for *"an encrypted copy in two physically separate
   locations plus a password manager"*, so a second copy is the stated minimum
   and today's single copy is the deviation. A working key on the Mac is not
   that backup, though — the backup remains unbuilt and belongs elsewhere.

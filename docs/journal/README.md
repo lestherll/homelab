@@ -33,3 +33,11 @@ what doesn't, don't pad. Bullets or one-liners only; no prose paragraphs.
 A deliberate decision made after finding something out, or a finding
 non-obvious enough you'd forget it in six months. Not every PR, not
 routine fixes.
+
+## A note on old `**Ref:** CONCEPT.md D<n>` lines
+
+Early entries cite a `CONCEPT.md` decision by its old D-number (e.g. `D1`,
+`D12`). `CONCEPT.md` no longer carries that numbered decision log — it's a
+short concept pitch now — so those numbers won't resolve to a section there.
+The full numbered log they refer to is in git history on `CONCEPT.md`. Not
+worth rewriting each entry for; this note is the fix.

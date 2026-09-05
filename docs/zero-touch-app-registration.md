@@ -192,7 +192,7 @@ jobs:
 keeps the Role's verb list honest about what CI actually does.
 
 The reconcile-trigger step is what makes this workflow double as the
-event-driven half of image delivery (homelab CONCEPT.md D19). Flux's own poll
+event-driven half of image delivery. Flux's own poll
 interval on these two objects is 5 minutes, so without this step a new image
 would sit unreconciled for up to that long; the annotation is Flux's standard
 reconcile-now signal and forces an immediate re-fetch and re-apply. No new

@@ -1,7 +1,7 @@
 # Platform API: what's live, and how to use it
 
 Practical reference for `platform.homelab/v1alpha1` — the typed self-service
-API (D15). For the *why* behind any of this, see
+platform API. For the *why* behind any of this, see
 `docs/self-service-platform-design-notes.md`. This doc is the *how*: what
 fields exist today, what an app repo's `deploy/` looks like, and how to
 verify a migration actually worked.
@@ -347,7 +347,7 @@ live object, so a `kubectl annotate` before merging doesn't help.
    existing object in place — confirmed empirically to preserve data and
    keep the same PVC (no reprovisioning).
 
-**Also expect a downtime window from the D2 gap.** There's no image-
+**Also expect a downtime window from the image-automation gap.** There's no image-
 automation reconciler yet, so if the app's `Deployment` gets recreated (as
 part of adopting the typed `Application`), it may briefly run the *old*
 image against a *new* environment variable name — as happened with
@@ -423,7 +423,7 @@ kubectl delete ns netpol-check
 
 ## Known limits, worth knowing before you start
 
-- **No image automation (D2 gap).** `:latest` + manual `kubectl rollout
+- **No image automation yet.** `:latest` + manual `kubectl rollout
   restart` is the current story. Tracked as LES-57.
 - **Schema evolution is additive-only in practice.** Adding an optional
   field to `Database`/`Application`/`ObjectStorage` is safe and doesn't

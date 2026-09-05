@@ -1,13 +1,16 @@
 # Target architecture
 
-**Status: design, 2026-08-30.** The end state D20 is aiming at. Not built.
-Implements `docs/adr/0001-single-model-talos-fleet.md`; read that for *why*, this
-for *what*.
+**Status: design, 2026-08-30 — partially built.** The end state the fleet
+migration is aiming at (fleet size 3, real HA). Machine 2's single-node build has landed several
+individual pieces this describes (certSANs, the Longhorn/Tailscale extensions,
+disk-tag-based storage classes); the N=3/VIP/HA shape itself is still ahead of
+machine 1's rebuild. Implements `docs/adr/0001-single-model-talos-fleet.md`;
+read that for *why*, this for *what*.
 
 > **Scope, in the layers of `docs/fleet/golden-architecture.md`:** this document
 > is the detailed build-out of the **Fleet** and **Infrastructure** layers. The
-> Platform API layer is out of scope here — what D20 does to it is priced
-> separately in `platform-api-under-d20.md`, and the fact that it needs a
+> Platform API layer is out of scope here — what the fleet migration does to it is priced
+> separately in `platform-api-migration-impact.md`, and the fact that it needs a
 > separate, short document is the point.
 >
 > Section headings name the layer they belong to. This replaces an earlier
@@ -213,8 +216,8 @@ A single-node Talos cluster running as a KubeVirt VM on the fleet.
 Why this and not namespaces: a genuinely separate API server and PKI, so a bad
 CRD, operator upgrade or RBAC change cannot reach prod — which is the entire
 point of a non-prod cluster. Why this and not a physical machine: it costs ~4Gi
-instead of a third of the fleet, and it exercises the KubeVirt path D20 already
-commits to.
+instead of a third of the fleet, and it exercises the KubeVirt path the fleet
+migration already commits to.
 
 Constraints that come with it:
 

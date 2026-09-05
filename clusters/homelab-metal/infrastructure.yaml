@@ -10,7 +10,7 @@
 # unpleasant to unpick later.
 #
 # WHAT THIS DOES NOT SEPARATE, and it matters: both entrypoints point at the
-# SAME ./infrastructure tree. So a D20 change to infrastructure/ reaches the VM
+# SAME ./infrastructure tree. So a fleet-migration change to infrastructure/ reaches the VM
 # cluster too, on its next reconcile. That is a deliberate, accepted
 # consequence here rather than an oversight — the VM cluster's storage and CNI
 # both change underneath it — and it is the reason the tailnet hostname was

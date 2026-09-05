@@ -2,18 +2,18 @@
 #
 # It replaces the local-path provisioner instances that used to back those two
 # classes. `scratch` deliberately stays on local-path
-# (infrastructure/storage/): docs/fleet/platform-api-under-d20.md §3 says do
+# (infrastructure/storage/): docs/fleet/platform-api-migration-impact.md §3 says do
 # not replicate twice — CNPG replicates Postgres, SeaweedFS replicates objects,
 # and Longhorn replicating underneath both would be nine copies of the same
 # bytes. `scratch` is disposable by definition and has nothing to replicate.
 #
 # WHAT THIS CHANGES FOR APP AUTHORS, and it is the one semantic change in the
-# whole D20 migration: `persistence.size` stops being documentation and becomes
+# whole fleet migration: `persistence.size` stops being documentation and becomes
 # a real limit. AGENT.md's "these PVCs have no quota" was true of a hostPath
 # directory, where `df` inside a pod reported the whole tier. A Longhorn volume
 # is a real block device, so a claim for 5Gi gets 5Gi and a runaway hits ENOSPC
 # instead of eating the tier. That inverts the old failure mode rather than
-# softening it — see the SeaweedFS note in platform-api-under-d20.md §2.
+# softening it — see the SeaweedFS note in platform-api-migration-impact.md §2.
 #
 # Chart version 1.12.1 (appVersion v1.12.1), latest on charts.longhorn.io as of
 # 2026-09-02. NOTE Talos v1.13.8 is off Longhorn's published verified matrix —
