@@ -72,6 +72,35 @@ spec:
     # be true; the two settings are one decision made in two files.
     kubeProxyReplacement: true
 
+    # PINNED, and the pin is load-bearing. Left unset, Cilium derives the pod
+    # MTU from the devices it detects and takes the SMALLEST — which stopped
+    # being enp1s0 (1500) the moment the Talos nodes got the tailscale system
+    # extension, because tailscale0 is 1280. Every pod on the cluster silently
+    # dropped to 1280.
+    #
+    # That broke app registration, and took a day to find, because the damage
+    # is invisible from inside the cluster and asymmetric by packet size. The
+    # tailnet apiserver proxy runs its own userspace WireGuard *inside* a pod
+    # netns, so its datagrams (payload + ~32B of WireGuard overhead) no longer
+    # fit the interface and have to fragment. On the LAN the fragments survive
+    # and everything looks fine; across the internet they are dropped, so small
+    # packets pass and large ones vanish. A TCP handshake completes, a
+    # ClientHello arrives, and the server's certificate flight never lands —
+    # surfacing to the client as `net/http: TLS handshake timeout`, which names
+    # neither MTU nor Cilium nor Tailscale. `kubectl` from the LAN keeps
+    # working throughout, so nothing looks broken from here.
+    #
+    # 1500 is enp1s0's MTU and correct under routingMode: native — pod traffic
+    # routes directly with no encapsulation overhead to subtract. Do not raise
+    # it above the physical NIC, and revisit it if the fleet ever gains a node
+    # whose primary interface is smaller (fleet/nodes.yaml is where that would
+    # show up first).
+    #
+    # Not fixed here, but worth knowing: tailscale0 is still in Cilium's device
+    # list, so kubeProxyReplacement serves NodePort on the node's tailnet
+    # address too. The tailnet policy is what bounds that today.
+    MTU: 1500
+
     # --- Talos constraints ---------------------------------------------------
     # Talos forbids workloads mounting cgroups; the host already has cgroup v2
     # mounted at the standard path, so point Cilium at it instead.
