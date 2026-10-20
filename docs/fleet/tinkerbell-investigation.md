@@ -271,7 +271,7 @@ writing an integration. This is the same conclusion the Metal³ note reached fro
 the other direction, and the same one Sidero Labs' own discontinuation of Sidero
 Metal points at.
 
-**And the second objection is one D20 already made.** Cluster API manages *fleets
+**And the second objection is one the fleet migration already made.** Cluster API manages *fleets
 of clusters*. `target-architecture.md` is one prod cluster plus one nested non-prod
 cluster, and §7 gives Terraform's `siderolabs/talos` provider the job of machine
 configs and bootstrap. CAPI would replace a provider block that works with a
@@ -323,7 +323,7 @@ The trigger should therefore be split, because it is really two capabilities:
 - **Smee needs L2 adjacency to the machines** — DHCP, proxy mode included. In
   Kubernetes that means `hostNetwork` or a LoadBalancer IP on the LAN. This repo
   has **no bare-metal load balancer**; the chart's default `lbClass` is
-  `kube-vip.io/kube-vip-class`, and D20 uses the Talos VIP for the apiserver only.
+  `kube-vip.io/kube-vip-class`, and the fleet migration uses the Talos VIP for the apiserver only.
   So adopting Tinkerbell means either `hostNetwork` on the Smee pod or introducing
   an L2 LB. Not hard, but it is a new component, and the note about the Talos VIP
   and bridged networking in `multi-node-ha-design-notes.md` is the context.
@@ -340,8 +340,8 @@ The trigger should therefore be split, because it is really two capabilities:
 **Not now, and not for machines 1–3.** With netboot deferred and remote power
 unwanted, every capability Tinkerbell would add is deferred with them (see the
 scope box above). Install the first three machines from USB per
-`headless-talos-install.md`, and apply their configs the way D20 §9.1 already
-describes. Nothing in this note is a reason to change that.
+`headless-talos-install.md`, and apply their configs the way the fleet migration's
+ADR §9.1 already describes. Nothing in this note is a reason to change that.
 
 **When netboot does arrive, Tinkerbell is the right project to serve it, and the
 survey was right to name it.** The corrections are to what it is for and in what

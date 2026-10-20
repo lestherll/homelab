@@ -1,10 +1,12 @@
 # `talosctl` off-LAN
 
-**Status: built in the repo, not yet on the node (2026-09-03).** Every
-declarative half of this has landed — schematic, `ExtensionServiceConfig`,
-certSANs, ACL tag and grant. The two halves that cannot be committed are the
-auth key and the `talosctl upgrade`; §5 is that runbook. Until it runs, the node
-is still LAN-only and this document describes intent rather than fact.
+**Status: built and verified (2026-09-03).** Every declarative half landed —
+schematic, `ExtensionServiceConfig`, certSANs, ACL tag and grant — and §5's
+runbook (auth key, `talosctl upgrade`) has since been run: the node carries
+the extension, and off-LAN `talosctl`/`terraform apply` are both verified
+working — see `AGENT.md`'s "A Talos node reaches the tailnet by system
+extension" and "`terraform apply` for the metal cluster runs from anywhere"
+facts. §5 stays below as the runbook for repeating this on machine 1.
 
 `kubectl` already worked off-LAN before this, via `svc:kube-apiserver-metal` and
 Google OIDC. This is the other half, and it is the half that matters more:

@@ -5,7 +5,7 @@
 # (docs/networkpolicy-enforcement-notes.md). Do not read a NetworkPolicy
 # manifest predating that as evidence anything was ever enforced.
 #
-# It ran in generic-veth CHAINING mode over Flannel until D20. It no longer
+# It ran in generic-veth CHAINING mode over Flannel until the fleet migration. It no longer
 # does: Talos renders no CNI and no kube-proxy, and this replaces both. That
 # was a net deletion — two Talos-managed components gone, two files in this
 # directory gone, and a ~35-line kube-proxy metrics workaround gone from the
@@ -58,7 +58,7 @@ spec:
     ipam:
       mode: kubernetes
     routingMode: native
-    # Valid because D20 puts every machine on one bridged LAN, so nodes are
+    # Valid because the fleet migration puts every machine on one bridged LAN, so nodes are
     # L2-adjacent and pod traffic routes directly with no overlay. If that ever
     # stops being true the fallback is tunnel mode — one value, not a redesign.
     autoDirectNodeRoutes: true

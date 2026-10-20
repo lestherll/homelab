@@ -30,8 +30,8 @@ spec:
       # ClusterRoles carry the label
       # `rbac.kro.run/aggregate-to-controller: "true"`.
       #
-      # Chosen deliberately: CONCEPT.md §3.2 requires a principal's privileges
-      # be "enumerable from a document, not by experiment", and unrestricted
+      # Chosen deliberately: a principal's privileges should be "enumerable
+      # from a document, not by experiment", and unrestricted
       # mode makes that impossible by construction. The document is
       # infrastructure/platform-api/rbac-kro-aggregate.yaml — every kind an RGD
       # renders must be granted there, or reconciliation fails with a
@@ -40,8 +40,8 @@ spec:
       mode: aggregation
     deployment:
       # Restated at the chart's own defaults rather than left implicit, so the
-      # platform's footprint stays visible in git (CONCEPT.md S10) and a chart
-      # bump can't change it without showing up in a diff.
+      # platform's footprint stays visible in git and a chart bump can't
+      # change it without showing up in a diff.
       resources:
         requests: { cpu: 256m, memory: 128Mi }
         limits: { cpu: 1000m, memory: 1024Mi }

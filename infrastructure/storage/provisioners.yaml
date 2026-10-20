@@ -5,10 +5,10 @@
 # `provisioner:` field matches its own --provisioner-name, so three names
 # partitioned the claims cleanly.
 #
-# `fast` and `bulk` moved to Longhorn with D20 (infrastructure/longhorn/), which
+# `fast` and `bulk` moved to Longhorn with the fleet migration (infrastructure/longhorn/), which
 # does that partitioning by DISK TAG instead and does it better: a tag can move
 # to another machine's disk without any consumer knowing. `scratch` deliberately
-# stayed behind — platform-api-under-d20.md §3's "do not replicate twice", and
+# stayed behind — platform-api-migration-impact.md §3's "do not replicate twice", and
 # there is nothing in a disposable volume worth replicating.
 #
 # The `node:` key is DEFAULT_PATH_FOR_NON_LISTED_NODES, and that reversed a

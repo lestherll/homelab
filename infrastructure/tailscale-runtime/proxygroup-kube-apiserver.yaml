@@ -32,7 +32,7 @@
 apiVersion: tailscale.com/v1alpha1
 kind: ProxyGroup
 metadata:
-  # RENAMED for D20. Two clusters must not claim one tailnet hostname:
+  # RENAMED for the fleet migration. Two clusters must not claim one tailnet hostname:
   # recreating a Tailscale exposure burns a Let's Encrypt certificate, and five
   # failed authorizations on a hostname within an hour trips LE's limit so that
   # name serves no TLS until the window clears (AGENT.md). While the VM cluster

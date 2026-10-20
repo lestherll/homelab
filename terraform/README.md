@@ -34,7 +34,7 @@ Terraform has no state encryption at any version — state confidentiality is a
 property of the backend, not the CLI, and 1.10's ephemeral *values* are a
 different feature. Had Terraform generated the PKI, `terraform.tfstate` would
 be the only copy of the cluster's root CA keys: a second root secret sitting
-beside the age key, which D12 says should not exist.
+beside the age key, which the single-root-key rule says should not exist.
 
 Generating it out of band inverts that. The encrypted file is authoritative and
 anything in state is a derived copy, so losing or leaking state is a rotation
@@ -99,8 +99,8 @@ it is worth naming what it costs rather than only what it buys.
 `docs/fleet/headless-talos-install.md` §10.2 says to do PKI work on machine 1
 *"because sops and the age key are there; the Mac has neither"*, and argues that
 copying the key over to save an SSH hop is a bad trade. That is no longer the
-state of the world — the key is on both — so D12's single root key now has two
-copies, and a lost or compromised laptop is a PKI rotation. Deliberate or not,
+state of the world — the key is on both — so the single-root-key rule's one
+key now has two copies, and a lost or compromised laptop is a PKI rotation. Deliberate or not,
 it should be a decision rather than a discovery.
 
 ### The Tailscale auth key

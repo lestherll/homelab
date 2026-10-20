@@ -393,7 +393,7 @@ spec:
     # NOTE the claim outlives the Application. Both offered tiers are
     # reclaimPolicy: Retain, so deleting an Application leaves its PV behind for
     # manual cleanup rather than destroying data — deliberate, and the same
-    # treatment Database gets under D4. It does mean an app deleted and
+    # treatment Database gets under the durability-classification rule. It does mean an app deleted and
     # recreated under the same name binds a fresh volume while the old one sits
     # Released; that is a cleanup chore, not data loss, which is the right way
     # round.
@@ -406,10 +406,10 @@ spec:
         metadata:
           name: ${schema.metadata.name + "-data"}
           namespace: ${schema.metadata.namespace}
-          # D4 classifies this as Durable — an app only asks for persistence
-          # when losing the data would matter. Labelled on the PVC because PVs
-          # do not inherit PVC labels, and the unlabelled-volume alerting D4
-          # calls for has to look at claims.
+          # The durability-classification rule classifies this as Durable — an
+          # app only asks for persistence when losing the data would matter.
+          # Labelled on the PVC because PVs do not inherit PVC labels, and the
+          # unlabelled-volume alerting that rule calls for has to look at claims.
           labels:
             platform.homelab/durability: durable
         spec:
@@ -477,8 +477,9 @@ spec:
               containers:
                 - name: ${schema.metadata.name}
                   image: ${schema.spec.image}
-                  # No image-automation reconciler exists yet (unbuilt C3/D2),
-                  # so tags are typically :latest and must re-pull on rollout.
+                  # No image-automation reconciler exists yet (the
+                  # image-automation gap), so tags are typically :latest and
+                  # must re-pull on rollout.
                   imagePullPolicy: Always
                   ports:
                     - containerPort: ${schema.spec.port}

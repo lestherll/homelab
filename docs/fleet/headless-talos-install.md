@@ -718,7 +718,7 @@ PKI in talosctl's spelling, which exists precisely for this kind of out-of-band
 work (see the comment in `.sops.yaml`).
 
 **Do this on machine 1, not the Mac.** `sops` and the age key are there; the Mac
-has neither. Copying the age key over would spread D12's single root key onto a
+has neither. Copying the age key over would spread the single-root-key rule's key onto a
 second device to save one SSH hop, which is a bad trade. Following AGENT.md's
 recipe:
 

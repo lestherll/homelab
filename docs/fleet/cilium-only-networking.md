@@ -1,8 +1,12 @@
 # Cilium as the only CNI — yes, and it removes more than it adds
 
-**Status: recommendation, 2026-09-01. Not built.** Answers "can we run Cilium
-alone in the new architecture?" — asked because the current design maintains
-three networking components and the goal is to maintain fewer.
+**Status: adopted, built.** Recommended 2026-09-01; live on
+`clusters/homelab-metal/` since — `AGENT.md`'s `cilium/` bullet is the current
+description (`cluster.network.cni.name: none`, `cluster.proxy.disabled: true`,
+`kubeProxyReplacement: true`). Answered "can we run Cilium alone in the new
+architecture?" — asked because the design at the time maintained three
+networking components and the goal was to maintain fewer. Kept below as the
+reasoning behind that build, not as a still-open recommendation.
 
 **Answer: yes. Cilium replaces both Flannel and kube-proxy, and the change is a
 net deletion.** Two Talos-managed components disappear, two files in
@@ -58,7 +62,7 @@ and expensive elsewhere:
 - **`ipam.mode: kubernetes` stays**, so Talos keeps allocating node pod CIDRs and
   **the pod network does not renumber.** This is not a re-addressing exercise.
 
-`autoDirectNodeRoutes: true` is valid because D20 puts every machine on one
+`autoDirectNodeRoutes: true` is valid because the fleet migration puts every machine on one
 bridged LAN (`target-architecture.md` §4). Nodes are L2-adjacent, so pod traffic
 routes directly with no overlay. On a topology where that stopped being true, the
 fallback is tunnel mode — a one-value change, not a redesign.

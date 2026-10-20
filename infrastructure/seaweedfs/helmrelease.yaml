@@ -24,8 +24,8 @@ spec:
         namespace: flux-system
   values:
     # Restated at the chart's own defaults, same reasoning as kro's
-    # HelmRelease: keeps the platform's footprint (CONCEPT.md S10) visible in
-    # git rather than moving silently on a chart bump.
+    # HelmRelease: keeps the platform's footprint visible in git rather than
+    # moving silently on a chart bump.
     resources:
       requests: { cpu: 100m, memory: 50Mi }
       limits: { cpu: 500m, memory: 500Mi }

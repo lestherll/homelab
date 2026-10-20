@@ -7,9 +7,9 @@
 #
 # This file is therefore load-bearing, not bookkeeping: adding a new kind to an
 # RGD without adding it here fails at reconcile time with a permission error.
-# That is the intended trade — CONCEPT.md §3.2 requires a principal's
-# privileges be enumerable from a document rather than discovered by
-# experiment, and this is that document.
+# That is the intended trade — every principal's privileges should be
+# enumerable from a document rather than discovered by experiment, and this
+# is that document.
 #
 # Rule of thumb when extending: grant the API groups the RGDs *render*, plus
 # the platform.homelab group itself (kro reconciles its own generated instance

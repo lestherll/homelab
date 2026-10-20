@@ -59,7 +59,7 @@ talos_version: "1.13.8"
 # than OpenTofu: the state-confidentiality problem that argues for OpenTofu is
 # solved differently here — the Talos PKI is generated out of band with
 # `talosctl gen secrets` and SOPS-encrypted, so tfstate holds a *derived* copy
-# rather than the authoritative one and D12's single root key survives.
+# rather than the authoritative one and the single-root-key rule's key survives.
 # Re-verified against https://github.com/hashicorp/terraform/releases as of
 # 2026-08-16: v1.15.8 (2026-07-08).
 terraform_version: "1.15.8"

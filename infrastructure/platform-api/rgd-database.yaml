@@ -81,10 +81,11 @@ spec:
           name: ${schema.metadata.name}
           namespace: ${schema.metadata.namespace}
         spec:
-          # No HA. Single-node cluster, consistent with D3.
+          # No HA. Single-node cluster, consistent with the single-node design.
           instances: 1
-          # Propagated to generated Pods/PVCs/Services. D4 classifies Postgres
-          # data as Durable, and the unlabelled-volume alerting D4 calls for
+          # Propagated to generated Pods/PVCs/Services. The
+          # durability-classification rule classifies Postgres data as
+          # Durable, and the unlabelled-volume alerting it calls for
           # must look at PVCs — PVs do not inherit PVC labels.
           inheritedMetadata:
             labels:
