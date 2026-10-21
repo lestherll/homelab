@@ -66,9 +66,17 @@ spec:
         # cluster holding 15d; at 7d retention and a smaller series count the
         # head is smaller, and 768Mi keeps ~1.3x headroom over the old ceiling.
         # Raise this before raising retention if the two ever compete.
+        #
+        # Re-sized again 2026-10-21: head series had grown to ~74k (from the
+        # ~80k baseline this was sized against, but via churn, not steady
+        # state — see below) and working_set was observed peaking at 844Mi,
+        # over the 768Mi limit, which was pushing Prometheus itself into the
+        # node-wide OOM loop that day. Root cause is the kubelet
+        # metricRelabelings change below, not sizing — this bump is margin,
+        # not a substitute for it.
         resources:
           requests: { cpu: 200m, memory: 384Mi }
-          limits: { cpu: 750m, memory: 768Mi }
+          limits: { cpu: 750m, memory: 1024Mi }
         storageSpec:
           volumeClaimTemplate:
             spec:
@@ -565,3 +573,20 @@ spec:
           - action: drop
             sourceLabels: [__name__, le]
             regex: (csi_operations|storage_operation_duration)_seconds_bucket;(0.25|2.5|15|25|120|600)(\.0)?
+          # `id`/`container_id`/`name` are cAdvisor's per-container-INSTANCE
+          # identifiers: containerd mints fresh values for all three on every
+          # restart. A pod that restarts 400+ times (observed 2026-10-21, a
+          # node-wide OOM loop that kept several pods crash-looping all day)
+          # forks a brand-new series on every single restart under these
+          # labels, and the old one just goes stale and sits in the head
+          # block until compaction — measured at 297 distinct `id` values and
+          # 1278 distinct `name` values against ~50-60 actually-running pods,
+          # which is most of that day's head-series growth and a meaningful
+          # share of why Prometheus's own memory grew with the storm.
+          # Dropping them collapses every restart of a container onto one
+          # continuous series instead of forking a new one each time — the
+          # same shape rate()/increase() already use for any counter that
+          # resets, so this loses nothing queries here rely on. Checked: no
+          # dashboard or alert rule in this repo selects on any of the three.
+          - action: labeldrop
+            regex: id|container_id|name
