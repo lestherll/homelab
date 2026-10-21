@@ -573,20 +573,62 @@ spec:
           - action: drop
             sourceLabels: [__name__, le]
             regex: (csi_operations|storage_operation_duration)_seconds_bucket;(0.25|2.5|15|25|120|600)(\.0)?
-          # `id`/`container_id`/`name` are cAdvisor's per-container-INSTANCE
-          # identifiers: containerd mints fresh values for all three on every
-          # restart. A pod that restarts 400+ times (observed 2026-10-21, a
-          # node-wide OOM loop that kept several pods crash-looping all day)
-          # forks a brand-new series on every single restart under these
-          # labels, and the old one just goes stale and sits in the head
-          # block until compaction — measured at 297 distinct `id` values and
-          # 1278 distinct `name` values against ~50-60 actually-running pods,
-          # which is most of that day's head-series growth and a meaningful
-          # share of why Prometheus's own memory grew with the storm.
-          # Dropping them collapses every restart of a container onto one
-          # continuous series instead of forking a new one each time — the
-          # same shape rate()/increase() already use for any counter that
-          # resets, so this loses nothing queries here rely on. Checked: no
-          # dashboard or alert rule in this repo selects on any of the three.
+        # `metricRelabelings` above applies to the plain `/metrics` kubelet
+        # endpoint, which carries no container_* series at all — a labeldrop
+        # placed there (as a first attempt briefly was, 2026-10-21) silently
+        # does nothing. The `id`/`container_id`/`name` cardinality problem
+        # lives on the SEPARATE `/metrics/cadvisor` endpoint, governed by
+        # this sibling key. Confirmed live via
+        # `/api/v1/status/config`: each kubelet ServiceMonitor endpoint
+        # renders its own `job_name: serviceMonitor/.../kubelet/{0,1,2}` with
+        # its own independent `metric_relabel_configs` — setting one key
+        # never touches another's list.
+        #
+        # `id`/`container_id`/`name` are cAdvisor's per-container-INSTANCE
+        # identifiers: containerd mints fresh values for all three on every
+        # restart. A pod that restarts 400+ times (observed 2026-10-21, a
+        # node-wide OOM loop that kept several pods crash-looping all day)
+        # forks a brand-new series on every single restart under these
+        # labels, and the old one just goes stale and sits in the head
+        # block until compaction — measured at 297 distinct `id` values and
+        # 1278 distinct `name` values against ~50-60 actually-running pods,
+        # which is most of that day's head-series growth and a meaningful
+        # share of why Prometheus's own memory grew with the storm.
+        # Dropping them collapses every restart of a container onto one
+        # continuous series instead of forking a new one each time — the
+        # same shape rate()/increase() already use for any counter that
+        # resets, so this loses nothing queries here rely on. Checked: no
+        # dashboard or alert rule in this repo selects on any of the three.
+        #
+        # The first 8 rules below are the chart's own default
+        # cAdvisorMetricRelabelings (verified against
+        # prometheus-community/kube-prometheus-stack @86.1.0) — preserved for
+        # the same reason as metricRelabelings above: setting this key
+        # replaces rather than merges.
+        cAdvisorMetricRelabelings:
+          - sourceLabels: [__name__]
+            action: drop
+            regex: 'container_cpu_(cfs_throttled_seconds_total|load_average_10s|system_seconds_total|user_seconds_total)'
+          - sourceLabels: [__name__]
+            action: drop
+            regex: 'container_fs_(io_current|io_time_seconds_total|io_time_weighted_seconds_total|reads_merged_total|sector_reads_total|sector_writes_total|writes_merged_total)'
+          - sourceLabels: [__name__]
+            action: drop
+            regex: 'container_memory_(mapped_file|swap)'
+          - sourceLabels: [__name__]
+            action: drop
+            regex: 'container_(file_descriptors|tasks_state|threads_max)'
+          - sourceLabels: [__name__, scope]
+            action: drop
+            regex: 'container_memory_failures_total;hierarchy'
+          - sourceLabels: [__name__, interface]
+            action: drop
+            regex: 'container_network_.*;(cali|cilium|cni|lxc|nodelocaldns|tunl).*'
+          - sourceLabels: [__name__]
+            action: drop
+            regex: 'container_spec.*'
+          - sourceLabels: [id, pod]
+            action: drop
+            regex: '.+;'
           - action: labeldrop
             regex: id|container_id|name
