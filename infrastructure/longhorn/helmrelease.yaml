@@ -80,6 +80,21 @@ spec:
     longhornUI:
       replicas: 1
 
+    # The chart's replica count for these (default 3 each, unset here before
+    # 2026-10-21) is an HA default for multi-node clusters — on this
+    # single-node one it was 12 CSI sidecar pods doing the work of 4, none of
+    # them resource-bounded (the chart exposes no resources key for any of
+    # the four). Found while diagnosing a node-wide OOM loop (talosctl dmesg,
+    # 2026-10-21: Talos's OOM controller SIGKILLing besteffort pods roughly
+    # every 15-90 min all day) — memory limits summed to 197% of allocatable
+    # with multiple uncapped consumers, this fleet among them. Revisit if
+    # machine 1 joins as a second node.
+    csi:
+      attacherReplicaCount: 1
+      provisionerReplicaCount: 1
+      resizerReplicaCount: 1
+      snapshotterReplicaCount: 1
+
     # Footprint stated explicitly so a chart bump cannot change it invisibly.
     # Machine 2 has ~7.2 GiB total and the platform does not fit like-for-like
     # (machine-2-first-build-plan.md §3), so every component's cost is a
